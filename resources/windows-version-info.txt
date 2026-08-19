@@ -1,0 +1,30 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(0, 1, 5, 0),
+    prodvers=(0, 1, 5, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '080404B0',
+        [
+          StringStruct('CompanyName', 'AniRSS Contributors'),
+          StringStruct('FileDescription', 'AniRSS RSS 番剧更新下载管理器'),
+          StringStruct('FileVersion', '0.1.5.0'),
+          StringStruct('InternalName', 'AniRSS'),
+          StringStruct('LegalCopyright', 'Copyright (c) 2026 AniRSS Contributors'),
+          StringStruct('OriginalFilename', 'AniRSS.exe'),
+          StringStruct('ProductName', 'AniRSS'),
+          StringStruct('ProductVersion', '0.1.5'),
+        ],
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [2052, 1200])]),
+  ],
+)

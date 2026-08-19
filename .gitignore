@@ -1,0 +1,57 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Environments and local tooling
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+.tox/
+.nox/
+.python-version
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# AniRSS local state (never commit user feeds, history, or credentials)
+/config.toml
+/config.json
+/anirss.db
+*.db-wal
+*.db-shm
+*.instance.lock
+/data/
+/downloads/
+/logs/
+.packaged-smoke/
+*.part
+*.aria2
+*.torrent.resume
+
+# PyInstaller platform-specific files
+*.manifest
+*.log

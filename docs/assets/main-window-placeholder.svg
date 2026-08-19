@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">AniRSS 主窗口截图占位图</title>
+  <desc id="desc">包含侧栏、订阅卡片和下载队列的界面线框占位图。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101728"/>
+      <stop offset="1" stop-color="#1d2440"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8b7cff"/>
+      <stop offset="1" stop-color="#5fc4ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" rx="28" fill="url(#bg)"/>
+  <rect x="28" y="28" width="250" height="664" rx="22" fill="#171e33" stroke="#303a59"/>
+  <circle cx="72" cy="77" r="20" fill="url(#accent)"/>
+  <text x="105" y="87" fill="#f7f8ff" font-family="system-ui, sans-serif" font-size="27" font-weight="700">AniRSS</text>
+  <g font-family="system-ui, sans-serif" font-size="18">
+    <rect x="45" y="130" width="216" height="50" rx="12" fill="#2c3154"/>
+    <text x="68" y="162" fill="#f4f5ff">订阅</text>
+    <text x="68" y="218" fill="#9ca6c5">下载活动</text>
+    <text x="68" y="274" fill="#9ca6c5">历史记录</text>
+    <text x="68" y="330" fill="#9ca6c5">设置</text>
+  </g>
+  <text x="322" y="76" fill="#f7f8ff" font-family="system-ui, sans-serif" font-size="30" font-weight="700">我的订阅</text>
+  <rect x="1044" y="45" width="190" height="48" rx="14" fill="url(#accent)"/>
+  <text x="1081" y="77" fill="#0f1630" font-family="system-ui, sans-serif" font-size="17" font-weight="700">＋ 添加订阅</text>
+  <g font-family="system-ui, sans-serif">
+    <rect x="322" y="122" width="432" height="218" rx="20" fill="#202943" stroke="#35405f"/>
+    <rect x="344" y="146" width="82" height="116" rx="12" fill="#323c5c"/>
+    <text x="451" y="174" fill="#f7f8ff" font-size="20" font-weight="700">Example Animation</text>
+    <text x="451" y="208" fill="#9fa9c6" font-size="15">每 15 分钟检查 · 自动下载</text>
+    <rect x="451" y="230" width="75" height="28" rx="14" fill="#244d46"/>
+    <text x="470" y="250" fill="#7ee2bd" font-size="13">已启用</text>
+    <rect x="344" y="286" width="388" height="8" rx="4" fill="#333c59"/>
+    <rect x="344" y="286" width="254" height="8" rx="4" fill="url(#accent)"/>
+    <text x="344" y="317" fill="#8f99b8" font-size="13">最新：第 08 集 · 65%</text>
+    <rect x="782" y="122" width="452" height="218" rx="20" fill="#202943" stroke="#35405f"/>
+    <text x="808" y="164" fill="#f7f8ff" font-size="20" font-weight="700">下载概览</text>
+    <text x="808" y="210" fill="#9fa9c6" font-size="15">活动任务</text>
+    <text x="1156" y="210" fill="#f7f8ff" font-size="18" text-anchor="end">2</text>
+    <text x="808" y="250" fill="#9fa9c6" font-size="15">今日完成</text>
+    <text x="1156" y="250" fill="#f7f8ff" font-size="18" text-anchor="end">6</text>
+    <text x="808" y="290" fill="#9fa9c6" font-size="15">当前速度</text>
+    <text x="1156" y="290" fill="#71d0ff" font-size="18" text-anchor="end">8.4 MiB/s</text>
+    <rect x="322" y="368" width="912" height="280" rx="20" fill="#202943" stroke="#35405f"/>
+    <text x="348" y="410" fill="#f7f8ff" font-size="20" font-weight="700">下载队列</text>
+    <line x1="348" y1="438" x2="1208" y2="438" stroke="#35405f"/>
+    <text x="348" y="475" fill="#dfe3f7" font-size="15">Example Animation S02E08 [1080p]</text>
+    <text x="1112" y="475" fill="#71d0ff" font-size="14">下载中</text>
+    <rect x="348" y="495" width="820" height="7" rx="4" fill="#333c59"/>
+    <rect x="348" y="495" width="533" height="7" rx="4" fill="url(#accent)"/>
+    <text x="348" y="548" fill="#dfe3f7" font-size="15">Open Licensed Short E03</text>
+    <text x="1112" y="548" fill="#7ee2bd" font-size="14">校验中</text>
+    <rect x="348" y="568" width="820" height="7" rx="4" fill="#333c59"/>
+    <rect x="348" y="568" width="768" height="7" rx="4" fill="#6dd6b2"/>
+  </g>
+  <text x="640" y="688" text-anchor="middle" fill="#77819f" font-family="system-ui, sans-serif" font-size="14">界面概念占位 · 非最终截图</text>
+</svg>
