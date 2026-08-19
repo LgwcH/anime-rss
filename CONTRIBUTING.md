@@ -13,7 +13,7 @@
 
 ## 建立开发环境
 
-需要 Python 3.11 或更高版本。建议为项目建立独立虚拟环境：
+需要 Windows 10/11 x64 和 Python 3.11 或更高版本。建议为项目建立独立虚拟环境：
 
 ```powershell
 python -m venv .venv
@@ -22,8 +22,8 @@ python -m pip install -U pip
 python -m pip install -e ".[dev]"
 ```
 
-Linux/macOS 激活命令为 `source .venv/bin/activate`。如果需要测试 BT 引擎，并且当前平台有
-兼容的 libtorrent Python 绑定，可另行运行 `python -m pip install -e ".[torrent]"`。
+如果需要测试 BT 引擎，并且当前 Python 版本有兼容的 Windows libtorrent 绑定，可另行运行
+`python -m pip install -e ".[torrent]"`。
 
 ## 本地检查
 
@@ -37,7 +37,7 @@ mypy
 ```
 
 仅修改文档时可以省略与代码无关的检查，但请确认所有相对链接仍然有效。界面改动应在至少
-一个支持的平台上手工验证常见窗口尺寸、浅色/深色主题和高 DPI 缩放。
+一台 Windows 10 或 Windows 11 设备上手工验证常见窗口尺寸、浅色/深色主题和高 DPI 缩放。
 
 ## 提交与拉取请求
 
@@ -51,6 +51,6 @@ mypy
 
 ## 报告问题
 
-错误报告应包含：AniRSS 版本、操作系统、Python 版本、复现步骤、预期/实际结果，以及移除
+错误报告应包含：AniRSS 版本、Windows 版本、Python 版本、复现步骤、预期/实际结果，以及移除
 URL、Token、Cookie、路径用户名和内容标题后的日志。涉及漏洞时不要创建公开 issue，请按照
 [SECURITY.md](SECURITY.md) 私下报告。

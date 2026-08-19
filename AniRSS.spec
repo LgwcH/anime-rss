@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller configuration for a self-contained AniRSS desktop build."""
+"""PyInstaller configuration for a self-contained AniRSS Windows build."""
 
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ from pathlib import Path
 project_root = Path(SPECPATH).resolve()
 source_root = project_root / "src"
 resources_root = project_root / "resources"
+
+if sys.platform != "win32":
+    raise RuntimeError("AniRSS packaging is supported only on Windows")
 
 datas = [
     (str(resources_root), "resources"),
@@ -35,15 +38,8 @@ if bundle_torrent:
     # The application intentionally imports this optional engine lazily.
     hiddenimports.append("libtorrent")
 
-if sys.platform == "win32":
-    icon_candidate = resources_root / "icons" / "anirss.ico"
-    version_candidate = resources_root / "windows-version-info.txt"
-elif sys.platform == "darwin":
-    icon_candidate = resources_root / "icons" / "anirss.icns"
-    version_candidate = None
-else:
-    icon_candidate = resources_root / "icons" / "anirss.png"
-    version_candidate = None
+icon_candidate = resources_root / "icons" / "anirss.ico"
+version_candidate = resources_root / "windows-version-info.txt"
 icon = str(icon_candidate) if icon_candidate.is_file() else None
 version = (
     str(version_candidate)
@@ -129,15 +125,3 @@ collection = COLLECT(
     upx=False,
     name="AniRSS",
 )
-
-if sys.platform == "darwin":
-    app = BUNDLE(
-        collection,
-        name="AniRSS.app",
-        icon=icon,
-        bundle_identifier="org.anirss.desktop",
-        info_plist={
-            "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "11.0",
-        },
-    )

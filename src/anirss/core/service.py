@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -65,13 +64,8 @@ class RefreshBatchError(RuntimeError):
 
 
 def default_data_directory() -> Path:
-    if sys.platform.startswith("win"):
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return base / "AniRSS"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "AniRSS"
-    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / "anirss"
+    base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    return base / "AniRSS"
 
 
 class AniRSSService:

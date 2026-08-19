@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections.abc import Sequence
 from typing import cast
@@ -84,14 +83,17 @@ def create_application(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    # Helps Windows choose the packaged app icon/group independently of python.exe.
-    if os.name == "nt":
-        try:
-            import ctypes
+    if sys.platform != "win32":
+        print("AniRSS 仅支持 Windows 10/11。", file=sys.stderr)
+        return 1
 
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("org.anirss.desktop")
-        except (AttributeError, OSError):
-            pass
+    # Helps Windows choose the packaged app icon/group independently of python.exe.
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("org.anirss.desktop")
+    except (AttributeError, OSError):
+        pass
     try:
         app, _window, _controller = create_application(argv)
     except AlreadyRunningError:

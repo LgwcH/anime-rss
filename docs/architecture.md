@@ -188,9 +188,8 @@ DHT、PEX 或 peer 流量。
 
 ## 开机自启动
 
-自启动适配器不调用 shell，只注册当前用户：Windows 使用 HKCU `Run`，macOS 写用户
-LaunchAgent，Linux/其他 freedesktop 桌面写 XDG Autostart。关闭开关只移除以 AniRSS 标识创建的
-条目。0.1 不请求提升权限，也没有启动延迟或启动时最小化的界面设置。
+自启动适配器不调用 shell，只在 Windows 当前用户的 HKCU `Run` 项中注册 AniRSS。关闭开关只
+移除以 AniRSS 标识创建的条目。0.1 不请求提升权限，也没有启动延迟或启动时最小化的界面设置。
 
 ## 安全边界与当前限制
 

@@ -41,17 +41,14 @@ Windows SDK Signing Tools 的受控环境中使用可信 Authenticode 证书：
 项来绕过检测。若 Defender 将干净构建误判为恶意软件，应先停止分发，并通过微软 Security
 Intelligence 样本提交入口以“Software developer”身份请求复核。
 
-Linux/macOS 使用 `./scripts/build.sh --clean [--with-torrent]`。脚本只构建当前操作系统和 CPU 架构
-的产物，不支持交叉打包。输出目录为 `dist/AniRSS/`；macOS 还会生成应用包结构。
-
-`-WithTorrent`/`--with-torrent` 会安装可选依赖并向 spec 传入显式标志。某些 Python/平台组合
-没有预编译 wheel，此时构建应失败并显示原因，而不是悄悄发布缺少 BT 的“完整”安装包。未传
-该选项时，即使环境中已经安装 `libtorrent`，也会明确排除它。
+`-WithTorrent` 会安装可选依赖并向 spec 传入显式标志。某些 Python 版本没有兼容的 Windows
+预编译 wheel，此时构建应失败并显示原因，而不是悄悄发布缺少 BT 的“完整”安装包。未传该选项
+时，即使环境中已经安装 `libtorrent`，也会明确排除它。
 
 ## 发布检查表
 
 1. 从带签名标签的干净提交构建，确认工作区没有真实订阅、数据库、日志或媒体。
-2. 分别在目标 Windows、macOS 和 Linux 环境构建；不要复制其他系统的 libtorrent 动态库。
+2. 在干净的 Windows 10/11 x64 环境构建；不要复制其他系统或架构的 libtorrent 动态库。
 3. 在未安装 Python 的干净用户环境中验证启动、HTTP 下载、暂停/恢复、路径清理和卸载。
 4. 验证重复启动同一数据目录时第二个进程退出，而使用不同 `--data-dir` 时可以独立运行。
 5. 用本地可控 HTTP 服务验证断点恢复仅接受起点和长度均匹配的 `Content-Range`。
@@ -60,13 +57,12 @@ Linux/macOS 使用 `./scripts/build.sh --clean [--with-torrent]`。脚本只构�
 8. 收集 Qt、libtorrent、Python 以及其他随包分发组件的许可证和必要声明。
 9. Windows 正式包必须通过 Authenticode 验证，再对最终归档生成 SHA-256 校验值；不能以哈希值
    代替发布者签名或杀毒复核。
-10. 发布说明列出是否包含 BT、支持的平台/架构、已知限制和 `CHANGELOG.md` 对应版本。
+10. 发布说明列出是否包含 BT、Windows 与 CPU 架构要求、已知限制和 `CHANGELOG.md` 对应版本。
 
 ## 资源与图标
 
 仓库提供原创的 `resources/icons/anirss.ico` 与 `anirss.png`，Windows 构建会把 ICO 写入 EXE。
-macOS 尚未提供 `anirss.icns`，因此正式发布 macOS 包前应补齐对应资源。替换图标前需确认原创或
-许可兼容，并把来源与许可证记录在 `resources/licenses/`。
+替换图标前需确认原创或许可兼容，并把来源与许可证记录在 `resources/licenses/`。
 
 ## 可复现性与供应链
 

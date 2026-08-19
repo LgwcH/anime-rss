@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "anirss"
 version = "0.1.5"
-description = "A privacy-friendly desktop RSS subscription and download manager for episodic media."
+description = "A privacy-friendly Windows RSS subscription and download manager for episodic media."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -15,12 +15,10 @@ authors = [
 keywords = ["rss", "desktop", "download-manager", "pyside6", "bittorrent"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "Environment :: X11 Applications :: Qt",
+  "Environment :: Win32 (MS Windows)",
   "Intended Audience :: End Users/Desktop",
   "License :: OSI Approved :: MIT License",
-  "Operating System :: MacOS",
   "Operating System :: Microsoft :: Windows",
-  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -36,8 +34,8 @@ dependencies = [
 [project.optional-dependencies]
 # The PyPI distribution is named ``libtorrent`` and exposes the
 # ``libtorrent`` Python module (often called python-libtorrent by distros).
-# Keeping it optional lets HTTP-only installations work on platforms for
-# which a matching binary wheel is not available.
+# Keeping it optional lets HTTP-only installations work when a matching
+# Windows binary wheel is not available.
 torrent = [
   "libtorrent>=2.0.11,<3",
 ]

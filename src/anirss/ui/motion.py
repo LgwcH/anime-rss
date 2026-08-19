@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import sys
 from contextlib import suppress
 
 from PySide6.QtCore import (
@@ -34,9 +33,6 @@ def reduced_motion_requested() -> bool:
         return True
     if override in {"0", "false", "no", "off"}:
         return False
-    if sys.platform != "win32":
-        return False
-
     # SPI_GETCLIENTAREAANIMATION mirrors Windows' "Animation effects" setting.
     user32 = getattr(getattr(ctypes, "windll", None), "user32", None)
     if user32 is None:

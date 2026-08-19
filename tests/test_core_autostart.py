@@ -1,36 +1,42 @@
 from __future__ import annotations
 
-import tempfile
+import subprocess
 import unittest
-from pathlib import Path
+import winreg
 from unittest.mock import patch
 
 from anirss.core.autostart import AutostartManager
 
 
 class AutostartTests(unittest.TestCase):
-    def test_linux_entry_is_user_scoped_and_reversible(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary)
-            config = home / "config"
-            executable = home / "AniRSS app"
-            with patch.dict("os.environ", {"XDG_CONFIG_HOME": str(config)}):
-                manager = AutostartManager(platform_name="linux", home=home)
-                manager.enable([str(executable), "--minimized"])
-                self.assertTrue(manager.is_enabled())
-                self.assertTrue(manager.is_configured([str(executable), "--minimized"]))
-                self.assertFalse(manager.is_configured([str(executable)]))
-                config_path = manager.config_path
-                assert config_path is not None
-                content = config_path.read_text(encoding="utf-8")
-                escaped_executable = str(executable).replace("\\", "\\\\")
-                self.assertIn(f'Exec="{escaped_executable}" "--minimized"', content)
-                manager.disable()
-                self.assertFalse(manager.is_enabled())
+    def test_windows_entry_is_user_scoped_and_uses_the_expected_command(self) -> None:
+        manager = AutostartManager()
+        command = [r"C:\Program Files\AniRSS\AniRSS.exe", "--minimized"]
 
-    def test_app_id_cannot_traverse(self) -> None:
+        with (
+            patch("winreg.CreateKeyEx") as create_key,
+            patch("winreg.SetValueEx") as set_value,
+        ):
+            key = create_key.return_value.__enter__.return_value
+            manager.enable(command)
+
+        create_key.assert_called_once_with(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_SET_VALUE,
+        )
+        set_value.assert_called_once_with(
+            key,
+            "AniRSS",
+            0,
+            winreg.REG_SZ,
+            subprocess.list2cmdline(command),
+        )
+
+    def test_app_name_rejects_control_characters(self) -> None:
         with self.assertRaises(ValueError):
-            AutostartManager(app_id="../../outside")
+            AutostartManager(app_name="AniRSS\nOther")
 
 
 if __name__ == "__main__":

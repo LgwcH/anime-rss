@@ -11,6 +11,8 @@ AniRSS 是一个开源的桌面 RSS/Atom 订阅与下载管理器，面向按集
 当前版本为 `0.1.5`，仍处于早期阶段。数据库结构、设置格式和界面可能在后续 `0.x` 版本中调整；
 重要媒体和应用数据请自行备份。
 
+**支持平台：Windows 10/11 x64。** AniRSS 不支持 Linux、macOS 或 32 位 Windows。
+
 ## 0.1 已实现
 
 - **按番剧归档**：每个订阅有独立名称、RSS 地址、过滤规则和保存位置。保存位置留空时，AniRSS
@@ -59,8 +61,7 @@ python -m pip install -e .
 anirss
 ```
 
-Linux/macOS 使用 `source .venv/bin/activate` 激活环境。也可以运行 `python -m anirss`；Windows
-上的 `anirss-gui` 入口不会额外打开控制台窗口。
+也可以运行 `python -m anirss`；`anirss-gui` 入口不会额外打开控制台窗口。
 
 基础安装包含 PySide6 界面和 HTTP 下载器。若要处理种子文件或磁力链接，可安装可选依赖：
 
@@ -81,9 +82,8 @@ python -m pip install -e ".[packaging]"
 .\scripts\build.ps1 -Clean
 ```
 
-构建含 BT 支持的产物可使用 `-WithTorrent`。Linux/macOS 对应运行
-`./scripts/build.sh --clean [--with-torrent]`。PyInstaller 通过仓库中的独立启动器导入正式应用入口，
-保持源码包的相对导入语义；更多说明见[打包文档](docs/packaging.md)。
+构建含 BT 支持的产物可使用 `-WithTorrent`。PyInstaller 通过仓库中的独立启动器导入正式应用
+入口，保持源码包的相对导入语义；更多说明见[打包文档](docs/packaging.md)。
 
 未传入签名证书时，Windows 脚本只生成本地开发包并显示警告。正式 Windows 发行必须使用
 `-RequireSignature` 和可信 Authenticode 证书；签名失败时构建会终止。不要通过杀毒排除项分发
@@ -150,26 +150,23 @@ BT 支持需要可选的 `libtorrent`。默认不在下载完成后继续做种�
 - 下载完成后是否继续做种、做种分钟数、BT 监听端口和无资源超时；
 - 浅色、深色或跟随系统主题。
 
-字段范围、生效时机和平台差异见[配置说明](docs/configuration.md)。
+字段范围和生效时机见[配置说明](docs/configuration.md)。
 
 ## 数据与隐私
 
-应用数据默认位于操作系统的当前用户数据目录：
-
-- Windows：`%LOCALAPPDATA%\AniRSS`
-- macOS：`~/Library/Application Support/AniRSS`
-- Linux：`${XDG_DATA_HOME:-~/.local/share}/anirss`
+应用数据默认位于 Windows 当前用户数据目录：`%LOCALAPPDATA%\AniRSS`。
 
 其中 `anirss.db` 是 SQLite 数据库，`logs/anirss.log` 是轮转日志，`anirss.instance.lock` 用于阻止
 同一数据目录被两个桌面进程同时打开。数据库会保存完整订阅地址、下载链接和代理设置，且不进行
 应用层加密；带 Token、passkey 或代理凭据的地址应视为敏感数据。不要把数据库或日志直接提交到
 Git 或公开 issue，分享前请自行检查并清理。
 
-AniRSS 不需要管理员/root 权限。开机自启动只写入当前用户的启动位置。请不要把下载目录设为
-系统目录，也不要以管理员/root 身份运行。
+AniRSS 不需要管理员权限。开机自启动只写入当前用户注册表。请不要把下载目录设为系统目录，
+也不要以管理员身份运行。
 
 ## 0.1 已知限制
 
+- 仅支持 Windows 10/11 x64，不支持 Linux、macOS 或 32 位 Windows。
 - 不支持 OPML 导入/导出、保存前订阅测试或独立的人工确认候选队列。
 - RSS 请求没有 ETag/Last-Modified 条件请求、自动重试、随机抖动或错误指数退避。
 - HTTP 下载没有自动重试；界面没有 HTTP 限速、重试次数或重定向策略设置。

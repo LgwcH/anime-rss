@@ -2,7 +2,7 @@
 
 The models deliberately contain only values that SQLite and JSON can represent.
 Filesystem paths are stored as strings so a database can be moved between
-platforms without constructing a platform-specific ``Path`` on import.
+Windows installations without constructing a ``Path`` on import.
 """
 
 from __future__ import annotations

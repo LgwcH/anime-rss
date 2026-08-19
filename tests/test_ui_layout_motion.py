@@ -152,7 +152,9 @@ class UiLayoutMotionTests(unittest.TestCase):
 
         self.assertIsNone(stack._animation_group)
         self.assertIsNone(stack._overlay)
-        self.assertIsNone(stack.currentWidget().graphicsEffect())
+        current_widget = stack.currentWidget()
+        assert current_widget is not None
+        self.assertIsNone(current_widget.graphicsEffect())
         stack.close()
 
     def test_main_window_compacts_without_topbar_overlap(self) -> None:

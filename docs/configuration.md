@@ -31,11 +31,8 @@ AniRSS 0.1 以桌面“设置”页和“新增/编辑订阅”对话框作为�
 | 最小化到托盘 | 开启 | 系统托盘可用时，最小化或关闭主窗口会隐藏到托盘并继续运行 |
 | 桌面通知 | 开启 | 通过系统托盘显示下载完成和界面报告的错误等消息 |
 
-当前用户级自启动位置如下：
-
-- Windows：当前用户注册表的 `Run` 项；
-- macOS：用户目录中的 LaunchAgent；
-- Linux/其他 freedesktop 桌面：用户目录中的 XDG Autostart 文件。
+当前用户级自启动使用 Windows 注册表的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+项，不写入系统级注册表。
 
 企业策略、桌面环境或系统托盘不可用时，相应功能可能无法工作。关闭自启动只移除 AniRSS 自己
 创建的当前用户条目。
@@ -166,11 +163,7 @@ HTTP/HTTPS 下载器是基础安装的一部分，当前行为如下：
 
 ## 数据库与日志
 
-默认应用数据目录：
-
-- Windows：`%LOCALAPPDATA%\AniRSS`
-- macOS：`~/Library/Application Support/AniRSS`
-- Linux：`${XDG_DATA_HOME:-~/.local/share}/anirss`
+默认应用数据目录为 `%LOCALAPPDATA%\AniRSS`。
 
 目录中的 `anirss.db` 保存订阅、条目、任务和设置；SQLite 使用事务，并在磁盘数据库上启用 WAL。
 `logs/anirss.log` 是 UTF-8 本地日志，单个文件最多约 2 MiB，保留 3 个轮转备份。

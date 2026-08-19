@@ -1,4 +1,4 @@
-"""Platform-aware paths used by the desktop application.
+"""Windows paths used by the desktop application.
 
 All paths can be overridden for development and portable builds.  Keeping this
 logic outside the UI also makes the core straightforward to test.
@@ -20,12 +20,8 @@ def app_data_dir(override: str | os.PathLike[str] | None = None) -> Path:
         path = Path(override).expanduser()
     elif portable_root := os.environ.get("ANIRSS_PORTABLE_DIR"):
         path = Path(portable_root).expanduser()
-    elif sys.platform == "win32":
-        path = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP_NAME
-    elif sys.platform == "darwin":
-        path = Path.home() / "Library" / "Application Support" / APP_NAME
     else:
-        path = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "anirss"
+        path = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP_NAME
 
     path.mkdir(parents=True, exist_ok=True)
     return path.resolve()

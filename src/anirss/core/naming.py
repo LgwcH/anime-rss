@@ -1,4 +1,4 @@
-"""Episode recognition and cross-platform safe download paths."""
+"""Episode recognition and Windows-safe download paths."""
 
 from __future__ import annotations
 
@@ -27,11 +27,11 @@ class UnsafePathError(ValueError):
 
 
 def sanitize_component(value: str, *, fallback: str = "Untitled", max_length: int = 180) -> str:
-    """Return one portable filesystem component, never a path.
+    """Return one Windows-safe filesystem component, never a path.
 
-    The result is valid on Windows, macOS, and common Linux filesystems.  It
-    removes path separators, control characters, trailing dots/spaces, and
-    Windows device names while preserving useful CJK characters.
+    The result removes path separators, control characters, trailing
+    dots/spaces, and Windows device names while preserving useful CJK
+    characters.
     """
 
     if max_length < 8:
