@@ -68,6 +68,7 @@ class UiLayoutMotionTests(unittest.TestCase):
         self.assertEqual(toggle._animation.state(), QAbstractAnimation.State.Stopped)
         self.assertEqual(toggle._get_offset(), 3.0)
 
+    @patch.dict(os.environ, {"ANIRSS_REDUCE_MOTION": "0"})
     def test_mouse_button_feedback_squashes_and_elastically_settles(self) -> None:
         button = JellyButton("Action")
         button.resize(120, 42)
@@ -84,6 +85,7 @@ class UiLayoutMotionTests(unittest.TestCase):
         self.assertAlmostEqual(button._get_deform(), 0.0, places=2)
         button.close()
 
+    @patch.dict(os.environ, {"ANIRSS_REDUCE_MOTION": "0"})
     def test_mouse_button_feedback_is_interruptible(self) -> None:
         button = JellyButton("Action")
         button.resize(120, 42)
