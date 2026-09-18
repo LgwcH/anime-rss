@@ -140,6 +140,8 @@ class SQLiteRepository:
                     ON feed_items(subscription_id, published_at);
                 CREATE INDEX IF NOT EXISTS idx_download_tasks_status
                     ON download_tasks(status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_download_tasks_destination
+                    ON download_tasks(destination_directory);
 
                 CREATE TABLE IF NOT EXISTS app_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -592,6 +594,20 @@ class SQLiteRepository:
                 (feed_item_id,),
             ).fetchone()
         return self._download_task_from_row(row) if row is not None else None
+
+    def list_download_task_filenames(self, destination_directory: str) -> list[str]:
+        """Return filenames of tasks recorded for one destination directory.
+
+        Filename reservation only needs tasks that share the target folder;
+        scoping the query keeps refreshes independent of total task history.
+        """
+
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT filename FROM download_tasks WHERE destination_directory = ?",
+                (destination_directory,),
+            ).fetchall()
+        return [str(row["filename"]) for row in rows]
 
     def list_download_tasks(
         self,

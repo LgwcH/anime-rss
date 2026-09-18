@@ -1148,10 +1148,13 @@ class AniRSSService:
         destination: Path,
         requested: str,
     ) -> str:
+        # Tasks persist str() of the resolved directory handed out by
+        # NamingPolicy.directory_for, so an exact match finds every task that
+        # shares this folder without scanning the whole task history.
+        resolved = destination.resolve()
         used = {
-            task.filename.casefold()
-            for task in self.repository.list_download_tasks()
-            if Path(task.destination_directory).resolve() == destination.resolve()
+            filename.casefold()
+            for filename in self.repository.list_download_task_filenames(str(resolved))
         }
         candidate = requested
         path = safe_download_path(destination, candidate)

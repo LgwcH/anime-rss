@@ -319,6 +319,45 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.repository.update_download_task_fields(task.id + 100, progress=0.1)
 
+    def test_download_task_filenames_are_scoped_to_the_directory(self) -> None:
+        task = self._new_task()
+        assert task.id is not None
+        assert self.subscription.id is not None
+        other_item, _ = self.repository.add_feed_item(
+            FeedItem(
+                subscription_id=self.subscription.id,
+                guid="other-directory-item",
+                title="Other directory item",
+                download_url="https://example.test/other.mkv",
+            )
+        )
+        assert other_item.id is not None
+        other_directory = str(Path(self.temporary.name, "elsewhere").resolve())
+        self.repository.add_download_task(
+            DownloadTask(
+                subscription_id=self.subscription.id,
+                feed_item_id=other_item.id,
+                title=other_item.title,
+                source_url=other_item.download_url or "",
+                destination_directory=other_directory,
+                filename="field.mkv",
+            )
+        )
+        scoped = self.repository.list_download_task_filenames(
+            str(Path(self.temporary.name).resolve())
+        )
+        self.assertEqual(scoped, ["field.mkv"])
+        self.assertEqual(
+            self.repository.list_download_task_filenames(other_directory),
+            ["field.mkv"],
+        )
+        self.assertEqual(
+            self.repository.list_download_task_filenames(
+                str(Path(self.temporary.name, "unused").resolve())
+            ),
+            [],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
