@@ -49,15 +49,37 @@ try {
     $pyinstallerArguments += "AniRSS.spec"
 
     Write-Host "Building AniRSS ..."
+    # PyInstaller's binary dependency scanner resolves DLLs through PATH.
+    # Stray toolchains that ship look-alike DLLs (for example Git for
+    # Windows' mingw64 OpenSSL) can shadow the Python runtime's own
+    # libssl/libcrypto and produce a bundle whose _ssl fails to load.
+    # Build with a sanitized PATH so only the Python runtime and Windows
+    # system directories are visible; the original PATH is restored for
+    # the signing step below.
+    $pythonPrefix = (& $Python -c "import sys; print(sys.base_prefix)").Trim()
+    $pythonHome = Split-Path -Parent (& $Python -c "import sys; print(sys.executable)").Trim()
+    $buildPath = @(
+        $pythonHome,
+        $pythonPrefix,
+        (Join-Path $pythonPrefix "DLLs"),
+        (Join-Path $pythonPrefix "Library\bin"),
+        "$env:SystemRoot\System32",
+        $env:SystemRoot,
+        "$env:SystemRoot\System32\Wbem",
+        "$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+    ) -join [IO.Path]::PathSeparator
     $previousBundleTorrent = $env:ANIRSS_BUNDLE_TORRENT
+    $previousPath = $env:PATH
     try {
         $env:ANIRSS_BUNDLE_TORRENT = if ($WithTorrent) { "1" } else { "0" }
+        $env:PATH = $buildPath
         & $Python @pyinstallerArguments
         if ($LASTEXITCODE -ne 0) {
             throw "PyInstaller build failed."
         }
     }
     finally {
+        $env:PATH = $previousPath
         if ($null -eq $previousBundleTorrent) {
             Remove-Item Env:ANIRSS_BUNDLE_TORRENT -ErrorAction SilentlyContinue
         }
