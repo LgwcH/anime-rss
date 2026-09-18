@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .models import (
     AppSettings,
@@ -652,18 +652,50 @@ class SQLiteRepository:
         return cursor.rowcount > 0
 
     def update_download_task(self, task_id: int, **changes: Any) -> DownloadTask:
-        task = self.get_download_task(task_id)
-        if task is None:
-            raise KeyError(f"download task {task_id} does not exist")
+        return self.update_download_task_fields(task_id, **changes)
+
+    def update_download_task_fields(
+        self,
+        task_id: int,
+        *guard_statuses: DownloadStatus | str,
+        **changes: Any,
+    ) -> DownloadTask:
+        """Atomically update individual task columns in a single statement.
+
+        Progress reports and pause/resume/cancel transitions interleave on
+        worker and UI threads.  Writing only the given columns in one
+        ``UPDATE`` (instead of a read-modify-write of the whole row) keeps
+        concurrent writers from resurrecting each other's stale values.
+        When *guard_statuses* are given, the update applies only while the
+        task is in one of them; otherwise the current row is returned
+        unchanged so the caller can inspect the winning state.
+        """
+
         allowed = {
             field_name
-            for field_name in task.__dataclass_fields__
+            for field_name in DownloadTask.__dataclass_fields__
             if field_name not in {"id", "subscription_id", "feed_item_id", "created_at"}
         }
         unknown = changes.keys() - allowed
         if unknown:
             raise ValueError(f"unsupported task fields: {', '.join(sorted(unknown))}")
-        return self.save_download_task(replace(task, **changes))
+        changes.setdefault("updated_at", utc_now())
+        assignments = ", ".join(f"{field} = ?" for field in changes)
+        values = [self._task_column_value(field, value) for field, value in changes.items()]
+        guards = [DownloadStatus(status).value for status in guard_statuses]
+        # Column names come from the dataclass whitelist above, never from
+        # caller input, so interpolating them into the statement is safe.
+        query = f"UPDATE download_tasks SET {assignments} WHERE id = ?"
+        parameters: list[object] = [*values, task_id]
+        if guards:
+            query += " AND status IN (" + ",".join("?" for _ in guards) + ")"
+            parameters.extend(guards)
+        with self._transaction() as connection:
+            connection.execute(query, parameters)
+        saved = self.get_download_task(task_id)
+        if saved is None:
+            raise KeyError(f"download task {task_id} does not exist")
+        return saved
 
     def requeue_interrupted_tasks(self) -> int:
         with self._transaction() as connection:
@@ -769,6 +801,14 @@ class SQLiteRepository:
             completed_at=_datetime_from_text(row["completed_at"]),
             updated_at=_datetime_from_text(row["updated_at"]),  # type: ignore[arg-type]
         )
+
+    @staticmethod
+    def _task_column_value(field_name: str, value: object) -> object:
+        if isinstance(value, DownloadKind | DownloadStatus):
+            return value.value
+        if field_name in {"started_at", "completed_at", "updated_at"}:
+            return _datetime_to_text(cast("datetime | None", value))
+        return value
 
     @staticmethod
     def _task_values(task: DownloadTask) -> tuple[object, ...]:

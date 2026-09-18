@@ -242,6 +242,83 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(len(self.repository.list_feed_items(self.subscription.id)), 1)
         self.assertEqual(len(self.repository.list_download_tasks()), 1)
 
+    def _new_task(self) -> DownloadTask:
+        assert self.subscription.id is not None
+        item, _ = self.repository.add_feed_item(
+            FeedItem(
+                subscription_id=self.subscription.id,
+                guid="field-update-item",
+                title="Field update item",
+                download_url="https://example.test/field.mkv",
+            )
+        )
+        assert item.id is not None
+        task, _ = self.repository.add_download_task(
+            DownloadTask(
+                subscription_id=self.subscription.id,
+                feed_item_id=item.id,
+                title=item.title,
+                source_url=item.download_url or "",
+                destination_directory=self.temporary.name,
+                filename="field.mkv",
+            )
+        )
+        assert task.id is not None
+        return task
+
+    def test_field_update_does_not_clobber_unrelated_columns(self) -> None:
+        task = self._new_task()
+        assert task.id is not None
+        paused = self.repository.update_download_task_fields(
+            task.id,
+            DownloadStatus.QUEUED,
+            DownloadStatus.DOWNLOADING,
+            status=DownloadStatus.PAUSED,
+            error="stop here",
+        )
+        self.assertEqual(paused.status, DownloadStatus.PAUSED)
+        # A late progress write must not resurrect the pre-pause status or
+        # drop the recorded error; only the given columns change.
+        progressed = self.repository.update_download_task(
+            task.id,
+            progress=0.5,
+            downloaded_bytes=50,
+            total_bytes=100,
+        )
+        self.assertEqual(progressed.status, DownloadStatus.PAUSED)
+        self.assertEqual(progressed.error, "stop here")
+        self.assertEqual(progressed.progress, 0.5)
+        self.assertEqual(progressed.downloaded_bytes, 50)
+        self.assertEqual(progressed.total_bytes, 100)
+
+    def test_guarded_update_is_a_no_op_outside_the_allowed_statuses(self) -> None:
+        task = self._new_task()
+        assert task.id is not None
+        completed = self.repository.update_download_task_fields(
+            task.id,
+            DownloadStatus.QUEUED,
+            status=DownloadStatus.COMPLETED,
+            progress=1.0,
+        )
+        self.assertEqual(completed.status, DownloadStatus.COMPLETED)
+        # A stale pause racing the completion must not revive the task.
+        stale = self.repository.update_download_task_fields(
+            task.id,
+            DownloadStatus.QUEUED,
+            DownloadStatus.DOWNLOADING,
+            status=DownloadStatus.PAUSED,
+        )
+        self.assertEqual(stale.status, DownloadStatus.COMPLETED)
+        self.assertEqual(stale.progress, 1.0)
+
+    def test_field_update_validates_fields_and_task_existence(self) -> None:
+        task = self._new_task()
+        assert task.id is not None
+        with self.assertRaisesRegex(ValueError, "unsupported task fields"):
+            self.repository.update_download_task_fields(task.id, no_such_column=1)
+        with self.assertRaises(KeyError):
+            self.repository.update_download_task_fields(task.id + 100, progress=0.1)
+
 
 if __name__ == "__main__":
     unittest.main()

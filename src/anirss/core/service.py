@@ -671,7 +671,12 @@ class AniRSSService:
         with self._state_lock:
             control = self._controls.get(task_id)
             future = self._futures.get(task_id)
-            updated = self.repository.update_download_task(task_id, status=DownloadStatus.PAUSED)
+            updated = self.repository.update_download_task_fields(
+                task_id,
+                DownloadStatus.QUEUED,
+                DownloadStatus.DOWNLOADING,
+                status=DownloadStatus.PAUSED,
+            )
             if control:
                 # Cancelling the current attempt releases its executor slot.
                 # Resume creates a fresh HTTP range request or torrent handle.
@@ -702,7 +707,16 @@ class AniRSSService:
                 if control and not control.cancelled:
                     control.resume()
                 status = DownloadStatus.QUEUED
-            updated = self.repository.update_download_task(task_id, status=status, error=None)
+            updated = self.repository.update_download_task_fields(
+                task_id,
+                DownloadStatus.QUEUED,
+                DownloadStatus.DOWNLOADING,
+                DownloadStatus.PAUSED,
+                DownloadStatus.FAILED,
+                DownloadStatus.CANCELLED,
+                status=status,
+                error=None,
+            )
             if self._running and status == DownloadStatus.QUEUED:
                 self._submit_task_locked(updated)
         self._emit_task_update(updated, "Resumed")
@@ -719,8 +733,12 @@ class AniRSSService:
                 control.cancel()
             if future:
                 future.cancel()
-            updated = self.repository.update_download_task(
+            updated = self.repository.update_download_task_fields(
                 task_id,
+                DownloadStatus.QUEUED,
+                DownloadStatus.DOWNLOADING,
+                DownloadStatus.PAUSED,
+                DownloadStatus.FAILED,
                 status=DownloadStatus.CANCELLED,
                 error=None,
             )
@@ -832,12 +850,16 @@ class AniRSSService:
                 or control.paused
             ):
                 return
-            task = self.repository.update_download_task(
+            task = self.repository.update_download_task_fields(
                 task_id,
+                DownloadStatus.QUEUED,
                 status=DownloadStatus.DOWNLOADING,
                 started_at=task.started_at or utc_now(),
                 error=None,
             )
+            if task.status != DownloadStatus.DOWNLOADING:
+                # A pause/cancel won the race against this worker's start.
+                return
         self._emit_task_update(task, "Downloading")
         last_written_progress = -1.0
         last_written_at = 0.0
@@ -870,18 +892,22 @@ class AniRSSService:
             result = self._downloaders.for_task(task).download(
                 task, self.get_settings(), control, on_progress
             )
-            current = self.repository.get_download_task(task_id)
-            if current is None or current.status == DownloadStatus.CANCELLED:
+            try:
+                completed = self.repository.update_download_task_fields(
+                    task_id,
+                    DownloadStatus.DOWNLOADING,
+                    status=DownloadStatus.COMPLETED,
+                    progress=1.0,
+                    downloaded_bytes=result.downloaded_bytes,
+                    total_bytes=result.total_bytes,
+                    completed_at=utc_now(),
+                    error=None,
+                )
+            except KeyError:
                 return
-            completed = self.repository.update_download_task(
-                task_id,
-                status=DownloadStatus.COMPLETED,
-                progress=1.0,
-                downloaded_bytes=result.downloaded_bytes,
-                total_bytes=result.total_bytes,
-                completed_at=utc_now(),
-                error=None,
-            )
+            if completed.status != DownloadStatus.COMPLETED:
+                # The user paused or cancelled while the worker was finishing.
+                return
             self._emit_task_update(completed, "Completed")
         except DownloadCancelled:
             current = self.repository.get_download_task(task_id)
@@ -897,20 +923,34 @@ class AniRSSService:
             }:
                 return
             target_status = DownloadStatus.QUEUED if self._stopping else DownloadStatus.CANCELLED
-            updated = self.repository.update_download_task(
-                task_id, status=target_status, error=None
-            )
+            try:
+                updated = self.repository.update_download_task_fields(
+                    task_id,
+                    DownloadStatus.DOWNLOADING,
+                    status=target_status,
+                    error=None,
+                )
+            except KeyError:
+                return
+            if updated.status != target_status:
+                return
             self._emit_task_update(updated, "Interrupted")
         except Exception as exc:
             current = self.repository.get_download_task(task_id)
             if current is None or current.status == DownloadStatus.CANCELLED:
                 return
             target_status = DownloadStatus.QUEUED if self._stopping else DownloadStatus.FAILED
-            updated = self.repository.update_download_task(
-                task_id,
-                status=target_status,
-                error=None if self._stopping else str(exc),
-            )
+            try:
+                updated = self.repository.update_download_task_fields(
+                    task_id,
+                    DownloadStatus.DOWNLOADING,
+                    status=target_status,
+                    error=None if self._stopping else str(exc),
+                )
+            except KeyError:
+                return
+            if updated.status != target_status:
+                return
             self._emit_task_update(updated, "Failed")
 
     def _emit_task_update(self, task: DownloadTask, message: str) -> None:

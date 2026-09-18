@@ -41,6 +41,14 @@ class DownloadResult:
     total_bytes: int | None
 
 
+@dataclass(slots=True)
+class _SeedingEntry:
+    """A completed torrent kept in the session for bounded seeding."""
+
+    handle: Any
+    expires_at: float  # time.monotonic() deadline
+
+
 class _LibtorrentSession(Protocol):
     def apply_settings(self, settings: dict[str, object]) -> None: ...
 
@@ -268,12 +276,15 @@ class LibtorrentDownloader:
     """Torrent/magnet downloader that imports ``libtorrent`` only on use.
 
     AniRSS never seeds by default.  When both ``seed_after_completion`` and a
-    positive ``seed_time_minutes`` are configured, this adapter seeds only for
-    that bounded duration and then pauses/removes the handle without deleting
-    downloaded files.
+    positive ``seed_time_minutes`` are configured, the finished handle stays
+    in the session for that bounded duration and a small reaper thread then
+    pauses/removes it without deleting downloaded files.  Seeding never
+    occupies a download worker: ``download`` returns as soon as the payload
+    is complete.
     """
 
     poll_seconds = 0.5
+    reap_interval_seconds = 5.0
     max_session_state_bytes = 4 * 1024 * 1024
 
     def __init__(self, state_path: str | Path | None = None) -> None:
@@ -281,6 +292,9 @@ class LibtorrentDownloader:
         self._session_lock = threading.RLock()
         self._session: Any | None = None
         self._libtorrent: Any | None = None
+        self._seeding: dict[str, _SeedingEntry] = {}
+        self._reaper_stop = threading.Event()
+        self._reaper_thread: threading.Thread | None = None
 
     @staticmethod
     def _load_libtorrent():
@@ -334,16 +348,77 @@ class LibtorrentDownloader:
             with suppress(Exception):
                 add_router(host, port)
 
+    @staticmethod
+    def _handle_key(handle: Any) -> str:
+        info_hashes = getattr(handle, "info_hashes", None)
+        if callable(info_hashes):
+            with suppress(Exception):
+                return str(info_hashes())
+        info_hash = getattr(handle, "info_hash", None)
+        if callable(info_hash):
+            with suppress(Exception):
+                return str(info_hash())
+        return f"handle:{id(handle)}"
+
+    def _register_seeding(self, handle: Any, seed_seconds: float) -> None:
+        key = self._handle_key(handle)
+        with self._session_lock:
+            self._seeding[key] = _SeedingEntry(
+                handle=handle,
+                expires_at=time.monotonic() + seed_seconds,
+            )
+            self._ensure_reaper_locked()
+
+    def _ensure_reaper_locked(self) -> None:
+        if self._reaper_thread is not None and self._reaper_thread.is_alive():
+            return
+        self._reaper_stop.clear()
+        self._reaper_thread = threading.Thread(
+            target=self._reap_loop,
+            name="AniRSS seeding reaper",
+            daemon=True,
+        )
+        self._reaper_thread.start()
+
+    def _reap_loop(self) -> None:
+        while not self._reaper_stop.wait(self.reap_interval_seconds):
+            self._reap_expired_seeds()
+
+    def _reap_expired_seeds(self) -> None:
+        now = time.monotonic()
+        with self._session_lock:
+            session = self._session
+            expired = [key for key, entry in self._seeding.items() if entry.expires_at <= now]
+            entries = [self._seeding.pop(key) for key in expired if key in self._seeding]
+        if session is None:
+            return
+        for entry in entries:
+            with suppress(Exception):
+                entry.handle.pause()
+            with suppress(Exception):
+                session.remove_torrent(entry.handle)
+
     def close(self) -> None:
         """Persist DHT/session state and release the shared engine."""
 
+        self._reaper_stop.set()
+        reaper = self._reaper_thread
+        if reaper is not None and reaper.is_alive() and reaper is not threading.current_thread():
+            reaper.join(timeout=2)
         with self._session_lock:
             session = self._session
             lt = self._libtorrent
+            seeding = list(self._seeding.values())
+            self._seeding.clear()
             self._session = None
             self._libtorrent = None
         if session is None:
             return
+        for entry in seeding:
+            with suppress(Exception):
+                entry.handle.pause()
+            with suppress(Exception):
+                session.remove_torrent(entry.handle)
         with suppress(Exception):
             session.pause()
         state_path = self._state_path
@@ -371,6 +446,7 @@ class LibtorrentDownloader:
         progress_callback: ProgressCallback | None = None,
     ) -> DownloadResult:
         lt, session = self._session_for(settings)
+        self._reap_expired_seeds()
         directory = Path(task.destination_directory).expanduser().resolve()
         directory.mkdir(parents=True, exist_ok=True)
         parameters: dict[str, object] = {"save_path": str(directory)}
@@ -411,13 +487,13 @@ class LibtorrentDownloader:
             raise DownloadError(f"could not add torrent: {exc}") from exc
 
         paused = False
-        completed_at: float | None = None
         downloaded = 0
         total: int | None = None
         metadata_started_at = time.monotonic()
         last_activity_at = metadata_started_at
         last_downloaded = 0
         metadata_ready = task.kind == DownloadKind.TORRENT
+        keep_seeding = False
         try:
             while True:
                 if control.cancelled:
@@ -488,21 +564,24 @@ class LibtorrentDownloader:
 
                 is_seeding = bool(getattr(status, "is_seeding", False))
                 if is_seeding or progress >= 1.0:
-                    if completed_at is None:
-                        completed_at = time.monotonic()
-                    seed_seconds = (
-                        settings.seed_time_minutes * 60 if settings.seed_after_completion else 0
-                    )
-                    if seed_seconds <= 0 or time.monotonic() - completed_at >= seed_seconds:
-                        break
+                    break
                 time.sleep(self.poll_seconds)
+            seed_seconds = settings.seed_time_minutes * 60 if settings.seed_after_completion else 0
+            if seed_seconds > 0:
+                # The worker returns as soon as the payload is complete so a
+                # long seeding period never occupies an executor slot.  The
+                # reaper retires the handle when its time is up; re-adding an
+                # already-seeding torrent simply refreshes its deadline.
+                self._register_seeding(handle, seed_seconds)
+                keep_seeding = True
         finally:
-            try:
-                handle.pause()
-                with self._session_lock:
-                    session.remove_torrent(handle)
-            except Exception:
-                pass
+            if not keep_seeding:
+                try:
+                    handle.pause()
+                    with self._session_lock:
+                        session.remove_torrent(handle)
+                except Exception:
+                    pass
 
         if progress_callback:
             progress_callback(downloaded, total or downloaded, 1.0)
