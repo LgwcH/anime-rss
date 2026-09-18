@@ -45,56 +45,14 @@ AniRSS 是一个开源的桌面 RSS/Atom 订阅与下载管理器，面向按集
 
 ![AniRSS 高级设置](docs/assets/settings-advanced.png)
 
-## 安装
-
-### 下载打包版本（推荐）
+## 下载
 
 从 [GitHub Releases](https://github.com/LgwcH/anime-rss/releases) 下载最新的
 `AniRSS-<版本>-windows-x64.zip`，解压到任意目录后运行其中的 `AniRSS.exe` 即可，无需
 安装 Python；压缩包已内置 BT 支持（libtorrent）。打包版未做代码签名，首次运行时
 Windows SmartScreen 可能提示未知发布者，请确认下载来源是本仓库的 Releases 页面。
 
-### 从源码运行
-
-需要 Python 3.11 或更高版本。推荐使用虚拟环境：
-
-```powershell
-# 下载或克隆本仓库后进入项目目录
-cd AniRSS
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-python -m pip install -e .
-anirss
-```
-
-也可以运行 `python -m anirss`；`anirss-gui` 入口不会额外打开控制台窗口。
-
-基础安装包含 PySide6 界面和 HTTP 下载器。若要处理种子文件或磁力链接，可安装可选依赖：
-
-```text
-python -m pip install -e ".[torrent]"
-```
-
-`libtorrent` 包含原生代码，可用性取决于 Python 版本、操作系统和 CPU 架构。安装失败时 AniRSS
-仍可作为 HTTP 下载器使用。请优先从 PyPI、系统发行版、conda-forge 或项目正式发布渠道取得
-兼容构建，不要从未知站点下载二进制文件。
-
-### 打包桌面应用
-
-项目提供 PyInstaller 配置：
-
-```powershell
-python -m pip install -e ".[packaging]"
-.\scripts\build.ps1 -Clean
-```
-
-构建含 BT 支持的产物可使用 `-WithTorrent`。PyInstaller 通过仓库中的独立启动器导入正式应用
-入口，保持源码包的相对导入语义；更多说明见[打包文档](docs/packaging.md)。
-
-未传入签名证书时，Windows 脚本只生成本地开发包并显示警告。正式 Windows 发行必须使用
-`-RequireSignature` 和可信 Authenticode 证书；签名失败时构建会终止。不要通过杀毒排除项分发
-未验证的 EXE，疑似误报应提交微软样本分析并等待最终判定。
+从源码运行和自行打包的方式见[开发](#开发)一节与[打包文档](docs/packaging.md)。
 
 ## 快速开始
 
