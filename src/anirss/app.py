@@ -83,7 +83,10 @@ def create_application(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    if sys.platform != "win32":
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    # Let argparse handle --help/--version on any platform; only actual
+    # application startup is restricted to Windows.
+    if sys.platform != "win32" and not {"-h", "--help", "--version"} & set(raw_args):
         print("AniRSS 仅支持 Windows 10/11。", file=sys.stderr)
         return 1
 

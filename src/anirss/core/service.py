@@ -671,7 +671,12 @@ class AniRSSService:
         with self._state_lock:
             control = self._controls.get(task_id)
             future = self._futures.get(task_id)
-            updated = self.repository.update_download_task(task_id, status=DownloadStatus.PAUSED)
+            updated = self.repository.update_download_task_fields(
+                task_id,
+                DownloadStatus.QUEUED,
+                DownloadStatus.DOWNLOADING,
+                status=DownloadStatus.PAUSED,
+            )
             if control:
                 # Cancelling the current attempt releases its executor slot.
                 # Resume creates a fresh HTTP range request or torrent handle.
@@ -702,7 +707,16 @@ class AniRSSService:
                 if control and not control.cancelled:
                     control.resume()
                 status = DownloadStatus.QUEUED
-            updated = self.repository.update_download_task(task_id, status=status, error=None)
+            updated = self.repository.update_download_task_fields(
+                task_id,
+                DownloadStatus.QUEUED,
+                DownloadStatus.DOWNLOADING,
+                DownloadStatus.PAUSED,
+                DownloadStatus.FAILED,
+                DownloadStatus.CANCELLED,
+                status=status,
+                error=None,
+            )
             if self._running and status == DownloadStatus.QUEUED:
                 self._submit_task_locked(updated)
         self._emit_task_update(updated, "Resumed")
@@ -719,8 +733,12 @@ class AniRSSService:
                 control.cancel()
             if future:
                 future.cancel()
-            updated = self.repository.update_download_task(
+            updated = self.repository.update_download_task_fields(
                 task_id,
+                DownloadStatus.QUEUED,
+                DownloadStatus.DOWNLOADING,
+                DownloadStatus.PAUSED,
+                DownloadStatus.FAILED,
                 status=DownloadStatus.CANCELLED,
                 error=None,
             )
@@ -832,12 +850,16 @@ class AniRSSService:
                 or control.paused
             ):
                 return
-            task = self.repository.update_download_task(
+            task = self.repository.update_download_task_fields(
                 task_id,
+                DownloadStatus.QUEUED,
                 status=DownloadStatus.DOWNLOADING,
                 started_at=task.started_at or utc_now(),
                 error=None,
             )
+            if task.status != DownloadStatus.DOWNLOADING:
+                # A pause/cancel won the race against this worker's start.
+                return
         self._emit_task_update(task, "Downloading")
         last_written_progress = -1.0
         last_written_at = 0.0
@@ -870,18 +892,22 @@ class AniRSSService:
             result = self._downloaders.for_task(task).download(
                 task, self.get_settings(), control, on_progress
             )
-            current = self.repository.get_download_task(task_id)
-            if current is None or current.status == DownloadStatus.CANCELLED:
+            try:
+                completed = self.repository.update_download_task_fields(
+                    task_id,
+                    DownloadStatus.DOWNLOADING,
+                    status=DownloadStatus.COMPLETED,
+                    progress=1.0,
+                    downloaded_bytes=result.downloaded_bytes,
+                    total_bytes=result.total_bytes,
+                    completed_at=utc_now(),
+                    error=None,
+                )
+            except KeyError:
                 return
-            completed = self.repository.update_download_task(
-                task_id,
-                status=DownloadStatus.COMPLETED,
-                progress=1.0,
-                downloaded_bytes=result.downloaded_bytes,
-                total_bytes=result.total_bytes,
-                completed_at=utc_now(),
-                error=None,
-            )
+            if completed.status != DownloadStatus.COMPLETED:
+                # The user paused or cancelled while the worker was finishing.
+                return
             self._emit_task_update(completed, "Completed")
         except DownloadCancelled:
             current = self.repository.get_download_task(task_id)
@@ -897,20 +923,34 @@ class AniRSSService:
             }:
                 return
             target_status = DownloadStatus.QUEUED if self._stopping else DownloadStatus.CANCELLED
-            updated = self.repository.update_download_task(
-                task_id, status=target_status, error=None
-            )
+            try:
+                updated = self.repository.update_download_task_fields(
+                    task_id,
+                    DownloadStatus.DOWNLOADING,
+                    status=target_status,
+                    error=None,
+                )
+            except KeyError:
+                return
+            if updated.status != target_status:
+                return
             self._emit_task_update(updated, "Interrupted")
         except Exception as exc:
             current = self.repository.get_download_task(task_id)
             if current is None or current.status == DownloadStatus.CANCELLED:
                 return
             target_status = DownloadStatus.QUEUED if self._stopping else DownloadStatus.FAILED
-            updated = self.repository.update_download_task(
-                task_id,
-                status=target_status,
-                error=None if self._stopping else str(exc),
-            )
+            try:
+                updated = self.repository.update_download_task_fields(
+                    task_id,
+                    DownloadStatus.DOWNLOADING,
+                    status=target_status,
+                    error=None if self._stopping else str(exc),
+                )
+            except KeyError:
+                return
+            if updated.status != target_status:
+                return
             self._emit_task_update(updated, "Failed")
 
     def _emit_task_update(self, task: DownloadTask, message: str) -> None:
@@ -958,9 +998,28 @@ class AniRSSService:
         elif previous.autostart:
             self._autostart.set_enabled(False, command)
         saved = self.repository.save_settings(settings)
+        if saved.max_concurrent_downloads != previous.max_concurrent_downloads:
+            self._resize_executor(saved.max_concurrent_downloads)
         self._scheduler.wake()
         self._emit(ServiceEvent(ServiceEventType.SETTINGS_SAVED, "Settings saved"))
         return saved
+
+    def _resize_executor(self, max_workers: int) -> None:
+        """Apply a concurrency change without disrupting in-flight downloads.
+
+        Workers already running finish on the old pool; new submissions use
+        the replacement immediately.
+        """
+
+        with self._state_lock:
+            if not self._running or self._executor is None:
+                return
+            old_executor = self._executor
+            self._executor = ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="AniRSS download",
+            )
+        old_executor.shutdown(wait=False, cancel_futures=False)
 
     def configure_autostart(self, enabled: bool) -> AppSettings:
         settings = self.get_settings()
@@ -1108,10 +1167,13 @@ class AniRSSService:
         destination: Path,
         requested: str,
     ) -> str:
+        # Tasks persist str() of the resolved directory handed out by
+        # NamingPolicy.directory_for, so an exact match finds every task that
+        # shares this folder without scanning the whole task history.
+        resolved = destination.resolve()
         used = {
-            task.filename.casefold()
-            for task in self.repository.list_download_tasks()
-            if Path(task.destination_directory).resolve() == destination.resolve()
+            filename.casefold()
+            for filename in self.repository.list_download_task_filenames(str(resolved))
         }
         candidate = requested
         path = safe_download_path(destination, candidate)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.server
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -418,6 +419,131 @@ class DownloaderTests(unittest.TestCase):
             ):
                 downloader.download(task, settings, DownloadControl())
             self.assertEqual(FakeLibtorrent.shared_session.removed, 1)
+
+    @staticmethod
+    def _seeding_fakes() -> tuple[type, type]:
+        class Params:
+            save_path = ""
+
+        class Status:
+            progress = 1.0
+            total_wanted_done = len(PAYLOAD)
+            total_wanted = len(PAYLOAD)
+            is_seeding = True
+            errc = None
+            num_peers = 1
+            num_seeds = 1
+
+        class Handle:
+            def status(self) -> Status:
+                return Status()
+
+            def has_metadata(self) -> bool:
+                return True
+
+            def info_hash(self) -> str:
+                return "0123456789abcdef0123456789abcdef01234567"
+
+            def pause(self) -> None:
+                return None
+
+            def resume(self) -> None:
+                return None
+
+        class Session:
+            def __init__(self) -> None:
+                self.added = 0
+                self.removed = 0
+
+            def apply_settings(self, _settings: object) -> None:
+                return None
+
+            def add_torrent(self, _parameters: object) -> Handle:
+                self.added += 1
+                return Handle()
+
+            def remove_torrent(self, _handle: Handle) -> None:
+                self.removed += 1
+
+        class FakeLibtorrent:
+            def __init__(self) -> None:
+                self.shared_session = Session()
+
+            def session(self, _parameters: object | None = None) -> Session:
+                return self.shared_session
+
+            @staticmethod
+            def parse_magnet_uri(_url: str) -> Params:
+                return Params()
+
+        return FakeLibtorrent, Session
+
+    def _seeding_task(self, directory: str) -> DownloadTask:
+        return DownloadTask(
+            subscription_id=1,
+            feed_item_id=1,
+            title="Seeded magnet",
+            source_url="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+            destination_directory=directory,
+            filename="episode.mkv",
+            kind=DownloadKind.MAGNET,
+        )
+
+    def test_seeding_releases_the_worker_and_the_reaper_retires_the_handle(self) -> None:
+        FakeLibtorrent, _Session = self._seeding_fakes()
+        with tempfile.TemporaryDirectory() as temporary:
+            fake = FakeLibtorrent()
+            settings = AppSettings(
+                download_root=temporary,
+                seed_after_completion=True,
+            )
+            cast(Any, settings).seed_time_minutes = 0.001  # 60 ms
+            downloader = LibtorrentDownloader()
+            downloader.reap_interval_seconds = 0.01
+            try:
+                with patch.object(
+                    LibtorrentDownloader,
+                    "_load_libtorrent",
+                    return_value=fake,
+                ):
+                    started_at = time.monotonic()
+                    result = downloader.download(
+                        self._seeding_task(temporary), settings, DownloadControl()
+                    )
+                # The worker returns immediately after completion instead of
+                # holding its executor slot for the whole seeding duration.
+                self.assertLess(time.monotonic() - started_at, 5)
+                self.assertEqual(result.downloaded_bytes, len(PAYLOAD))
+                self.assertEqual(fake.shared_session.removed, 0)
+                self.assertEqual(len(downloader._seeding), 1)
+                deadline = time.monotonic() + 2
+                while fake.shared_session.removed == 0 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(fake.shared_session.removed, 1)
+                self.assertEqual(len(downloader._seeding), 0)
+            finally:
+                downloader.close()
+
+    def test_close_removes_seeding_handles(self) -> None:
+        FakeLibtorrent, _Session = self._seeding_fakes()
+        with tempfile.TemporaryDirectory() as temporary:
+            fake = FakeLibtorrent()
+            settings = AppSettings(
+                download_root=temporary,
+                seed_after_completion=True,
+                seed_time_minutes=30,
+            )
+            downloader = LibtorrentDownloader()
+            with patch.object(
+                LibtorrentDownloader,
+                "_load_libtorrent",
+                return_value=fake,
+            ):
+                downloader.download(self._seeding_task(temporary), settings, DownloadControl())
+            self.assertEqual(len(downloader._seeding), 1)
+            downloader.close()
+            self.assertEqual(fake.shared_session.removed, 1)
+            self.assertEqual(len(downloader._seeding), 0)
 
 
 if __name__ == "__main__":
