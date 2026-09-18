@@ -253,13 +253,17 @@ class DatabaseTests(unittest.TestCase):
             )
         )
         assert item.id is not None
+        # Mirror production: the service always persists the resolved path
+        # handed out by NamingPolicy.directory_for.  CI temp dirs may contain
+        # 8.3 short names that resolve() expands, so an unresolved path here
+        # would not match directory-scoped queries.
         task, _ = self.repository.add_download_task(
             DownloadTask(
                 subscription_id=self.subscription.id,
                 feed_item_id=item.id,
                 title=item.title,
                 source_url=item.download_url or "",
-                destination_directory=self.temporary.name,
+                destination_directory=str(Path(self.temporary.name).resolve()),
                 filename="field.mkv",
             )
         )
