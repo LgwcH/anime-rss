@@ -47,6 +47,13 @@ AniRSS 是一个开源的桌面 RSS/Atom 订阅与下载管理器，面向按集
 
 ## 安装
 
+### 下载打包版本（推荐）
+
+从 [GitHub Releases](https://github.com/LgwcH/anime-rss/releases) 下载最新的
+`AniRSS-<版本>-windows-x64.zip`，解压到任意目录后运行其中的 `AniRSS.exe` 即可，无需
+安装 Python；压缩包已内置 BT 支持（libtorrent）。打包版未做代码签名，首次运行时
+Windows SmartScreen 可能提示未知发布者，请确认下载来源是本仓库的 Releases 页面。
+
 ### 从源码运行
 
 需要 Python 3.11 或更高版本。推荐使用虚拟环境：
