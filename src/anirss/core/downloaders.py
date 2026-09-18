@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import re
-import ssl
 import threading
 import time
 import urllib.parse
@@ -17,6 +16,7 @@ from typing import Any, Protocol, cast
 
 from .models import AppSettings, DownloadKind, DownloadTask
 from .naming import ensure_within_root, safe_download_path
+from .net import SafeRedirectHandler, tls_context
 
 ProgressCallback = Callable[[int, int | None, float], None]
 MAX_TORRENT_METADATA_BYTES = 20 * 1024 * 1024
@@ -153,7 +153,7 @@ class HttpDownloader:
         if existing:
             headers["Range"] = f"bytes={existing}-"
         request = urllib.request.Request(task.source_url, headers=headers)
-        handlers: list[urllib.request.BaseHandler] = []
+        handlers: list[urllib.request.BaseHandler] = [SafeRedirectHandler()]
         handlers.append(
             urllib.request.ProxyHandler(
                 {"http": settings.proxy_url, "https": settings.proxy_url}
@@ -162,12 +162,9 @@ class HttpDownloader:
             )
         )
         if parsed.scheme == "https":
-            context = (
-                ssl.create_default_context()
-                if settings.verify_tls
-                else ssl._create_unverified_context()
+            handlers.append(
+                urllib.request.HTTPSHandler(context=tls_context(verify=settings.verify_tls))
             )
-            handlers.append(urllib.request.HTTPSHandler(context=context))
 
         try:
             control.checkpoint()
@@ -597,19 +594,17 @@ class LibtorrentDownloader:
         if parsed.scheme not in {"http", "https"}:
             raise DownloadError("torrent metadata URL must use HTTP or HTTPS")
         handlers: list[urllib.request.BaseHandler] = [
+            SafeRedirectHandler(),
             urllib.request.ProxyHandler(
                 {"http": settings.proxy_url, "https": settings.proxy_url}
                 if settings.proxy_url
                 else {}
-            )
+            ),
         ]
         if parsed.scheme == "https":
-            context = (
-                ssl.create_default_context()
-                if settings.verify_tls
-                else ssl._create_unverified_context()
+            handlers.append(
+                urllib.request.HTTPSHandler(context=tls_context(verify=settings.verify_tls))
             )
-            handlers.append(urllib.request.HTTPSHandler(context=context))
         request = urllib.request.Request(
             url,
             headers={

@@ -861,6 +861,20 @@ class ServiceTests(unittest.TestCase):
             self.service.remove_task(task.id, delete_files=True)
         self.assertIsNotNone(self.service.get_task(task.id))
 
+    def test_concurrency_resize_replaces_the_executor_while_running(self) -> None:
+        self.service.start()
+        first = self.service._executor
+        assert first is not None
+        self.service.save_settings({"max_concurrent_downloads": 5})
+        second = self.service._executor
+        assert second is not None
+        self.assertIsNot(first, second)
+        self.assertEqual(second._max_workers, 5)
+        self.assertTrue(first._shutdown)
+        # Saving unrelated settings must not churn the pool.
+        self.service.save_settings({"default_poll_interval_minutes": 45})
+        self.assertIs(self.service._executor, second)
+
 
 if __name__ == "__main__":
     unittest.main()

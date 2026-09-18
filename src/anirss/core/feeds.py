@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import html
 import re
-import ssl
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -15,6 +14,7 @@ from email.utils import parsedate_to_datetime
 
 from .models import AppSettings, FeedItem
 from .naming import recognize_episode
+from .net import SafeRedirectHandler, tls_context
 
 MAX_FEED_BYTES = 10 * 1024 * 1024
 _MAGNET_RE = re.compile(r"magnet:\?[^\s<>\"']+", re.IGNORECASE)
@@ -242,7 +242,7 @@ def fetch_feed(url: str, settings: AppSettings | None = None) -> bytes:
     if parsed.scheme not in {"http", "https"}:
         raise FeedError("feed URL must use HTTP or HTTPS")
 
-    handlers: list[urllib.request.BaseHandler] = []
+    handlers: list[urllib.request.BaseHandler] = [SafeRedirectHandler()]
     if settings.proxy_url:
         handlers.append(
             urllib.request.ProxyHandler({"http": settings.proxy_url, "https": settings.proxy_url})
@@ -250,12 +250,9 @@ def fetch_feed(url: str, settings: AppSettings | None = None) -> bytes:
     else:
         handlers.append(urllib.request.ProxyHandler({}))
     if parsed.scheme == "https":
-        context = (
-            ssl.create_default_context()
-            if settings.verify_tls
-            else ssl._create_unverified_context()
+        handlers.append(
+            urllib.request.HTTPSHandler(context=tls_context(verify=settings.verify_tls))
         )
-        handlers.append(urllib.request.HTTPSHandler(context=context))
 
     request = urllib.request.Request(
         url,

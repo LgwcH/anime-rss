@@ -516,6 +516,12 @@ class DesktopController(QObject):
         downloaded = int(payload.get("downloaded_bytes") or 0)
         now = time.monotonic()
         with self._speed_lock:
+            # Samples only flow while a task is actively downloading.  Drop
+            # entries that stopped updating so long sessions cannot grow
+            # this map with finished or removed tasks.
+            stale = [key for key, sample in self._speed_samples.items() if now - sample[0] > 60]
+            for key in stale:
+                del self._speed_samples[key]
             previous = self._speed_samples.get(task_id)
             speed = 0.0
             if previous and now > previous[0] and downloaded >= previous[1]:

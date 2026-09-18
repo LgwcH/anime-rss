@@ -998,9 +998,28 @@ class AniRSSService:
         elif previous.autostart:
             self._autostart.set_enabled(False, command)
         saved = self.repository.save_settings(settings)
+        if saved.max_concurrent_downloads != previous.max_concurrent_downloads:
+            self._resize_executor(saved.max_concurrent_downloads)
         self._scheduler.wake()
         self._emit(ServiceEvent(ServiceEventType.SETTINGS_SAVED, "Settings saved"))
         return saved
+
+    def _resize_executor(self, max_workers: int) -> None:
+        """Apply a concurrency change without disrupting in-flight downloads.
+
+        Workers already running finish on the old pool; new submissions use
+        the replacement immediately.
+        """
+
+        with self._state_lock:
+            if not self._running or self._executor is None:
+                return
+            old_executor = self._executor
+            self._executor = ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="AniRSS download",
+            )
+        old_executor.shutdown(wait=False, cancel_futures=False)
 
     def configure_autostart(self, enabled: bool) -> AppSettings:
         settings = self.get_settings()
