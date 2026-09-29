@@ -1,21 +1,32 @@
-"""AniRSS main desktop window."""
+"""AniRSS main desktop window (08-compact-pro shell)."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QEvent, QThreadPool, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QPalette, QResizeEvent, QScreen, QShowEvent
+from PySide6.QtCore import QEvent, Qt, QThreadPool, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QKeySequence,
+    QPalette,
+    QResizeEvent,
+    QScreen,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QMainWindow,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from .. import __version__
 from .controller import DemoController, controller_call
 from .data import as_mapping
 from .downloads import DownloadsPage
@@ -26,9 +37,16 @@ from .settings import SettingsPage
 from .subscriptions import SubscriptionsPage
 from .theme import ThemeManager, colors
 from .tray import TrayController
-from .widgets import ElidedLabel, Sidebar
+from .widgets import ElidedLabel, Sidebar, StatusDot
 from .widgets import JellyButton as QPushButton
 from .worker import FunctionWorker
+
+
+def _vline() -> QFrame:
+    line = QFrame()
+    line.setObjectName("VLine")
+    line.setFixedSize(1, 16)
+    return line
 
 
 class MainWindow(QMainWindow):
@@ -64,45 +82,69 @@ class MainWindow(QMainWindow):
         root = QWidget()
         root.setObjectName("AppRoot")
         self.setCentralWidget(root)
-        root_layout = QHBoxLayout(root)
+        root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        self.sidebar = Sidebar()
-        self.sidebar.page_selected.connect(self._select_page)
-        root_layout.addWidget(self.sidebar)
-
-        right = QWidget()
-        right.setObjectName("Workspace")
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-        root_layout.addWidget(right, 1)
-
+        # ---------- 顶栏 (41px) ----------
         self.topbar = QFrame()
         self.topbar.setObjectName("TopBar")
-        self.topbar.setMinimumHeight(72)
+        self.topbar.setFixedHeight(41)
         self.topbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.top_layout = QHBoxLayout(self.topbar)
-        self.top_layout.setContentsMargins(30, 0, 30, 0)
-        self.top_layout.setSpacing(12)
-        self.context_dot = QFrame()
-        self.context_dot.setObjectName("ContextDot")
-        self.context_dot.setFixedSize(10, 10)
-        self.top_layout.addWidget(self.context_dot)
-        self.breadcrumb = ElidedLabel("工作台  /  概览")
-        self.breadcrumb.setStyleSheet("font-weight:600;")
+        self.top_layout.setContentsMargins(16, 0, 16, 0)
+        self.top_layout.setSpacing(10)
+        self.logo = QLabel("A")
+        self.logo.setObjectName("LogoBlock")
+        self.logo.setFixedSize(16, 16)
+        self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.top_layout.addWidget(self.logo)
+        brand = QLabel("AniRSS")
+        brand.setObjectName("BrandLabel")
+        self.top_layout.addWidget(brand)
+        self.top_layout.addWidget(_vline())
+        self.breadcrumb = ElidedLabel("概览")
+        self.breadcrumb.setObjectName("Crumb")
         self.top_layout.addWidget(self.breadcrumb, 1)
-        self.refresh_status = ElidedLabel("自动刷新已开启")
-        self.refresh_status.setObjectName("StatusChip")
-        self.refresh_status.setMinimumWidth(130)
-        self.refresh_status.setMaximumWidth(240)
-        self.top_layout.addWidget(self.refresh_status)
-        self.refresh_button = QPushButton("立即刷新")
-        self.refresh_button.setProperty("primary", True)
+        self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("TopSearch")
+        self.search_edit.setFixedSize(220, 26)
+        self.search_edit.setPlaceholderText("搜索订阅 / 剧集    Ctrl K")
+        self.search_edit.returnPressed.connect(self._apply_global_search)
+        self.top_layout.addWidget(self.search_edit)
+        self.refresh_button = QPushButton()
+        self.refresh_button.setObjectName("IconButton")
+        self.refresh_button.setFixedSize(26, 26)
+        self.refresh_button.setToolTip("刷新全部源 (Ctrl R)")
         self.refresh_button.clicked.connect(self.refresh_all)
         self.top_layout.addWidget(self.refresh_button)
-        right_layout.addWidget(self.topbar)
+        self.top_layout.addWidget(_vline())
+        self.conn_dot = StatusDot("sub")
+        self.top_layout.addWidget(self.conn_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.refresh_status = ElidedLabel("下载器空闲")
+        self.refresh_status.setObjectName("ConnStatus")
+        self.refresh_status.setMinimumWidth(120)
+        self.refresh_status.setMaximumWidth(240)
+        self.top_layout.addWidget(self.refresh_status)
+        root_layout.addWidget(self.topbar)
+
+        # ---------- 主体: 导航 + 页面 ----------
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        root_layout.addWidget(body, 1)
+
+        self.sidebar = Sidebar()
+        self.sidebar.page_selected.connect(self._select_page)
+        body_layout.addWidget(self.sidebar)
+
+        workspace = QWidget()
+        workspace.setObjectName("Workspace")
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(0)
+        body_layout.addWidget(workspace, 1)
 
         self.pages = AnimatedStackedWidget()
         self.overview_page = OverviewPage(self.controller)
@@ -121,13 +163,17 @@ class MainWindow(QMainWindow):
                 page.error.connect(self.show_error)
             if hasattr(page, "message"):
                 page.message.connect(self.show_message)
-        right_layout.addWidget(self.pages, 1)
+        workspace_layout.addWidget(self.pages, 1)
 
+        self.overview_page.refresh_requested.connect(self.refresh_all)
+        self.overview_page.show_all_downloads.connect(lambda: self.sidebar.select(2))
         self.subscriptions_page.changed.connect(self.overview_page.reload)
+        self.subscriptions_page.changed.connect(self._update_nav_badges)
         self.subscriptions_page.route_changed.connect(self._subscription_route_changed)
         self.subscriptions_page.refresh_requested.connect(self.refresh_subscription)
         self.subscriptions_page.show_download_requested.connect(self._show_download_task)
         self.downloads_page.changed.connect(self.overview_page.reload)
+        self.downloads_page.changed.connect(self._update_nav_badges)
         self.settings_page.theme_changed.connect(self.apply_theme)
         self.settings_page.saved.connect(self._settings_saved)
 
@@ -151,10 +197,15 @@ class MainWindow(QMainWindow):
         settings_action.setShortcut("Ctrl+,")
         settings_action.triggered.connect(self._open_settings_shortcut)
         self.addAction(settings_action)
+        search_action = QAction(self)
+        search_action.setShortcut(QKeySequence("Ctrl+K"))
+        search_action.triggered.connect(self._focus_search)
+        self.addAction(search_action)
 
         self._connect_controller_signals()
         self._load_initial_settings()
         self._update_icons()
+        self._update_nav_badges()
         self.statusBar().showMessage("就绪")
 
     def _apply_screen_constraints(self, screen: QScreen | None, *, initial: bool = False) -> None:
@@ -218,6 +269,7 @@ class MainWindow(QMainWindow):
             self.subscriptions_page.reload(refresh_detail=refresh_detail)
         elif current is self.overview_page:
             self.overview_page.reload()
+        self._update_nav_badges()
 
     def _downloads_changed(self) -> None:
         current = self.pages.currentWidget()
@@ -225,6 +277,7 @@ class MainWindow(QMainWindow):
             self.downloads_page.reload()
         elif current is self.overview_page:
             self.overview_page.reload()
+        self._update_nav_badges()
 
     def _load_initial_settings(self) -> None:
         try:
@@ -274,10 +327,8 @@ class MainWindow(QMainWindow):
 
     def _update_icons(self) -> None:
         c = colors(self._resolved_theme)
-        self.refresh_button.setIcon(icon("refresh", "#FFFFFF", 18))
-        self.sidebar.set_theme(self._resolved_theme)
-        # Keep secondary dialog buttons legible if their icon is refreshed later.
-        self.refresh_status.setStyleSheet(f"color:{c.text_muted};")
+        self.refresh_button.setIcon(icon("refresh", c.text2, 14))
+        self.conn_dot.set_theme(self._resolved_theme)
 
     def _select_page(self, index: int, *, animate: bool = True) -> None:
         if not 0 <= index < len(self.page_list):
@@ -293,6 +344,17 @@ class MainWindow(QMainWindow):
     def _open_settings_shortcut(self) -> None:
         self.sidebar.select_without_animation(3)
         self._select_page(3, animate=False)
+
+    def _focus_search(self) -> None:
+        self.search_edit.setFocus()
+        self.search_edit.selectAll()
+
+    def _apply_global_search(self) -> None:
+        query = self.search_edit.text().strip()
+        if not query:
+            return
+        self.sidebar.select(1)
+        self.subscriptions_page.apply_search(query)
 
     def _subscription_route_changed(self, name: str) -> None:
         if self.pages.currentWidget() is self.subscriptions_page:
@@ -317,12 +379,54 @@ class MainWindow(QMainWindow):
         if index in {0, 1, 2}:
             self._reload_page(index)
         self._update_tray_status()
+        self._update_conn_status()
+
+    def _snapshot(self) -> dict[str, Any]:
+        try:
+            snapshot = controller_call(self.controller, "dashboard_snapshot", default={}) or {}
+            return as_mapping(snapshot)
+        except Exception:
+            return {}
+
+    def _update_conn_status(self) -> None:
+        normalized = self._snapshot()
+        if not normalized:
+            return
+        active = int(normalized.get("active_downloads", normalized.get("downloading", 0)) or 0)
+        speed = str(normalized.get("download_speed", normalized.get("speed", "")))
+        if active:
+            self.refresh_status.setText(f"{active} 个任务 · {speed}")
+            self.conn_dot.set_state("run")
+        else:
+            self.refresh_status.setText("下载器空闲")
+            self.conn_dot.set_state("sub")
+        subtext = f"v{__version__}"
+        if speed and speed not in {"0 B/s", "—"}:
+            subtext = f"v{__version__} · 合计 {speed}"
+        self.sidebar.set_status(
+            f"{active} 个下载中" if active else "下载器空闲",
+            subtext,
+            active=bool(active),
+        )
+
+    def _update_nav_badges(self) -> None:
+        try:
+            subscriptions = (
+                controller_call(self.controller, "list_subscriptions", default=[]) or []
+            )
+            self.sidebar.set_badge(1, len(subscriptions) or None)
+        except Exception:
+            pass
+        snapshot = self._snapshot()
+        if snapshot:
+            active = int(snapshot.get("active_downloads", snapshot.get("downloading", 0)) or 0)
+            self.sidebar.set_badge(2, active or None)
 
     def refresh_all(self) -> None:
         if self._refresh_worker is not None or self._subscription_refresh_worker is not None:
             return
         self.refresh_button.setEnabled(False)
-        self.refresh_button.setText("正在刷新…")
+        self.overview_page.set_refreshing(True)
         self.refresh_status.setText("正在检查所有订阅")
         worker = FunctionWorker(lambda: controller_call(self.controller, "refresh_all"))
         self._refresh_worker = worker
@@ -335,15 +439,16 @@ class MainWindow(QMainWindow):
         self.overview_page.reload()
         self.subscriptions_page.reload()
         self.downloads_page.reload()
+        self.overview_page.set_refreshing(False)
         self.refresh_status.setText("刚刚完成刷新")
-        self.refresh_button.setText("立即刷新")
         self.refresh_button.setEnabled(True)
+        self._update_nav_badges()
         self.show_message("所有订阅已刷新", 3500)
 
     def _refresh_failed(self, detail: str) -> None:
         self._refresh_worker = None
+        self.overview_page.set_refreshing(False)
         self.refresh_status.setText("刷新失败")
-        self.refresh_button.setText("立即刷新")
         self.refresh_button.setEnabled(True)
         self.show_error(f"刷新订阅失败：{detail}")
 
@@ -394,17 +499,11 @@ class MainWindow(QMainWindow):
         self.downloads_page.focus_task(task_id)
 
     def _update_tray_status(self) -> None:
-        try:
-            snapshot = controller_call(self.controller, "dashboard_snapshot", default={}) or {}
-            normalized = as_mapping(snapshot)
-            if normalized:
-                active = int(
-                    normalized.get("active_downloads", normalized.get("downloading", 0)) or 0
-                )
-                speed = str(normalized.get("download_speed", normalized.get("speed", "")))
-                self.tray.update_status(active, speed)
-        except Exception:
-            pass
+        normalized = self._snapshot()
+        if normalized:
+            active = int(normalized.get("active_downloads", normalized.get("downloading", 0)) or 0)
+            speed = str(normalized.get("download_speed", normalized.get("speed", "")))
+            self.tray.update_status(active, speed)
 
     def _controller_notification(self, title: str, message: str) -> None:
         self.show_message(f"{title}：{message}")
@@ -445,6 +544,8 @@ class MainWindow(QMainWindow):
         self.subscriptions_page.reload()
         self.downloads_page.reload()
         self._update_tray_status()
+        self._update_conn_status()
+        self._update_nav_badges()
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -462,9 +563,9 @@ class MainWindow(QMainWindow):
             return
         compact = event.size().width() < 1120
         self.sidebar.set_compact(compact)
+        self.search_edit.setVisible(event.size().width() >= 900)
         self.refresh_status.setVisible(event.size().width() >= 1040)
-        horizontal_margin = 18 if compact else 30
-        self.top_layout.setContentsMargins(horizontal_margin, 0, horizontal_margin, 0)
+        self.conn_dot.setVisible(event.size().width() >= 1040)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._force_quit and self._minimize_to_tray and self.tray.available:

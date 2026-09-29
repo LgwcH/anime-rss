@@ -11,7 +11,6 @@ from typing import Any
 from PySide6.QtCore import QPropertyAnimation, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QBoxLayout,
     QComboBox,
     QFrame,
     QGraphicsOpacityEffect,
@@ -36,13 +35,13 @@ from .data import as_mapping
 from .motion import COLLAPSE_DURATION_MS, ease_out_curve, reduced_motion_requested
 from .resources import icon
 from .theme import colors
-from .widgets import BadgeLabel, ElidedLabel, EmptyState, PageHeader
+from .widgets import BadgeLabel, CoverAvatar, ElidedLabel, EmptyState, PageHeader
 from .widgets import JellyButton as QPushButton
 from .worker import FunctionWorker
 
 _STATUS_PRESENTATION: dict[str, tuple[str, str, str, str]] = {
-    "queued": ("等待中", "info", "查看任务", "show"),
-    "downloading": ("下载中", "accent", "查看任务", "show"),
+    "queued": ("等待中", "neutral", "查看任务", "show"),
+    "downloading": ("下载中", "info", "查看任务", "show"),
     "paused": ("已暂停", "warning", "继续", "download"),
     "completed": ("已完成", "success", "查看任务", "show"),
     "failed": ("下载失败", "danger", "重试", "download"),
@@ -111,30 +110,38 @@ class SubscriptionDetailView(QWidget):
         self._secondary_header_forced = False
 
         self.root_layout = QVBoxLayout(self)
-        self.root_layout.setContentsMargins(30, 18, 30, 22)
-        self.root_layout.setSpacing(11)
+        self.root_layout.setContentsMargins(24, 20, 24, 0)
+        self.root_layout.setSpacing(12)
 
-        navigation = QHBoxLayout()
         self.back_button = QPushButton("返回订阅")
         self.back_button.setProperty("flat", True)
         self.back_button.clicked.connect(lambda _checked=False: self.back_requested.emit())
-        navigation.addWidget(self.back_button)
-        navigation.addStretch()
-        self.root_layout.addLayout(navigation)
+        # 三栏布局中订阅列表始终可见, 返回按钮只作为可编程入口保留。
+        self.back_button.hide()
 
         self.header_card = QFrame()
-        self.header_card.setObjectName("HeroCard")
         header_layout = QVBoxLayout(self.header_card)
-        header_layout.setContentsMargins(20, 17, 20, 17)
-        header_layout.setSpacing(10)
-        self.header_top = QBoxLayout(QBoxLayout.Direction.LeftToRight)
-        self.header_top.setSpacing(8)
-        self.header = PageHeader("订阅详情", "选择条目后可自主加入下载队列")
-        self.header_top.addWidget(self.header, 1)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(14)
+
+        det_head = QHBoxLayout()
+        det_head.setSpacing(14)
+        self.cover = CoverAvatar("", 56)
+        det_head.addWidget(self.cover, 0, Qt.AlignmentFlag.AlignTop)
+        self.header = PageHeader("订阅详情", "")
+        self.status_badge = BadgeLabel("追番中", "sub")
+        self.header.title_layout.addWidget(self.status_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.header.title_layout.addStretch()
+        det_head.addWidget(self.header, 1)
         self.header_actions = QWidget()
         header_actions_layout = QHBoxLayout(self.header_actions)
         header_actions_layout.setContentsMargins(0, 0, 0, 0)
         header_actions_layout.setSpacing(8)
+        self.refresh_button = QPushButton("刷新此订阅")
+        self.refresh_button.setProperty("expandedText", "刷新此订阅")
+        self.refresh_button.setProperty("primary", True)
+        self.refresh_button.clicked.connect(self._request_refresh)
+        header_actions_layout.addWidget(self.refresh_button)
         self.edit_button = QPushButton("编辑")
         self.edit_button.setProperty("expandedText", "编辑")
         self.edit_button.clicked.connect(self._request_edit)
@@ -150,46 +157,41 @@ class SubscriptionDetailView(QWidget):
         self.info_button.clicked.connect(self._toggle_subscription_info)
         self.info_button.hide()
         header_actions_layout.addWidget(self.info_button)
-        self.refresh_button = QPushButton("刷新此订阅")
-        self.refresh_button.setProperty("expandedText", "刷新此订阅")
-        self.refresh_button.setProperty("primary", True)
-        self.refresh_button.clicked.connect(self._request_refresh)
-        header_actions_layout.addWidget(self.refresh_button)
         self._header_actions_compact = False
         self._update_header_action_mode(True)
-        self.header_top.addWidget(self.header_actions)
-        header_layout.addLayout(self.header_top)
-        self.metadata_widget = QWidget()
+        det_head.addWidget(self.header_actions, 0, Qt.AlignmentFlag.AlignTop)
+        header_layout.addLayout(det_head)
+
+        # 信息条: 记录 / 刷新 / 路径 / 规则
+        self.metadata_widget = QFrame()
+        self.metadata_widget.setObjectName("InfoGrid")
         metadata_layout = QHBoxLayout(self.metadata_widget)
-        metadata_layout.setContentsMargins(0, 0, 0, 0)
-        metadata_layout.setSpacing(14)
+        metadata_layout.setContentsMargins(0, 12, 0, 12)
+        metadata_layout.setSpacing(0)
         self.count_metadata = ElidedLabel()
-        self.count_metadata.setObjectName("Muted")
-        self.count_metadata.setMaximumWidth(180)
-        self.count_metadata.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Preferred,
-        )
-        metadata_layout.addWidget(self.count_metadata)
         self.refresh_metadata = ElidedLabel()
-        self.refresh_metadata.setObjectName("Muted")
-        self.refresh_metadata.setMaximumWidth(280)
-        self.refresh_metadata.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Preferred,
-        )
-        metadata_layout.addWidget(self.refresh_metadata)
         self.metadata = ElidedLabel("", Qt.TextElideMode.ElideMiddle)
-        self.metadata.setObjectName("Muted")
-        metadata_layout.addWidget(self.metadata, 1)
+        self.rules = ElidedLabel("")
+        info_cells: list[tuple[str, ElidedLabel]] = [
+            ("已记录", self.count_metadata),
+            ("上次刷新", self.refresh_metadata),
+            ("保存路径", self.metadata),
+            ("匹配规则", self.rules),
+        ]
+        for index, (label_text, value_label) in enumerate(info_cells):
+            cell = QFrame()
+            cell.setObjectName("InfoCell")
+            cell.setProperty("first", index == 0)
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(0 if index == 0 else 16, 0, 16, 0)
+            cell_layout.setSpacing(3)
+            cell_label = QLabel(label_text)
+            cell_label.setObjectName("InfoLabel")
+            cell_layout.addWidget(cell_label)
+            value_label.setObjectName("InfoValue")
+            cell_layout.addWidget(value_label)
+            metadata_layout.addWidget(cell, 1)
         header_layout.addWidget(self.metadata_widget)
-        self.rules = QLabel()
-        self.rules.setTextFormat(Qt.TextFormat.PlainText)
-        self.rules.setWordWrap(True)
-        self.rules.setMinimumWidth(0)
-        self.rules.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.rules.setObjectName("Muted")
-        header_layout.addWidget(self.rules)
         self.root_layout.addWidget(self.header_card)
 
         self.notice = QLabel(
@@ -250,23 +252,22 @@ class SubscriptionDetailView(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
-        self.table.setAlternatingRowColors(True)
+        self.table.setAlternatingRowColors(False)
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(
-            max(54, self.fontMetrics().height() * 2 + 20)
-        )
+        self.table.verticalHeader().setDefaultSectionSize(34)
         table_header = self.table.horizontalHeader()
-        table_header.setMinimumSectionSize(64)
+        table_header.setMinimumSectionSize(52)
+        table_header.setFixedHeight(30)
         table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         table_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         table_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         table_header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(0, 76)
-        self.table.setColumnWidth(2, 144)
-        self.table.setColumnWidth(3, 72)
-        self.table.setColumnWidth(4, 88)
+        self.table.setColumnWidth(0, 64)
+        self.table.setColumnWidth(2, 120)
+        self.table.setColumnWidth(3, 64)
+        self.table.setColumnWidth(4, 110)
         self.table.setColumnWidth(5, 128)
         self.table.currentCellChanged.connect(self._selection_changed)
         self.table.cellClicked.connect(lambda _row, _column: self._set_details_expanded(True))
@@ -405,12 +406,13 @@ class SubscriptionDetailView(QWidget):
             or self._subscription.get("save_path")
             or "使用全局下载目录"
         )[:4000]
+        self.cover.set_title(name)
         self.header.title.setText(name)
         self.header.subtitle.setText(feed_url)
         self.header.subtitle.setToolTip(html.escape(feed_url))
-        self.count_metadata.setText(f"已记录 {count} 条")
-        self.refresh_metadata.setText(f"上次刷新 {last_update}")
-        self.metadata.setText(f"保存到 {path}")
+        self.count_metadata.setText(f"{count} 条")
+        self.refresh_metadata.setText(last_update)
+        self.metadata.setText(path)
         include_text, include_full = _keyword_summary(
             self._subscription.get("include_keywords"),
             "不限",
@@ -419,8 +421,21 @@ class SubscriptionDetailView(QWidget):
             self._subscription.get("exclude_keywords"),
             "无",
         )
-        rules_text = f"包含：{include_text}    排除：{exclude_text}"
-        self.rules.setText(rules_text)
+        self.rules.setText(f"包含 {include_text} · 排除 {exclude_text}")
+        enabled = bool(self._subscription.get("enabled", True))
+        auto = bool(
+            self._subscription.get(
+                "auto_download", self._subscription.get("download_enabled", True)
+            )
+        )
+        if enabled and auto:
+            label, tone = "追番中", "sub"
+        elif enabled:
+            label, tone = "仅记录", "wait"
+        else:
+            label, tone = "已停用", "done"
+        self.status_badge.setText(label)
+        self.status_badge.set_tone(tone)
         self.header_card.setToolTip(
             html.escape(
                 f"已记录 {count} 条\n上次刷新 {last_update}\n保存到 {path}\n"
@@ -566,7 +581,7 @@ class SubscriptionDetailView(QWidget):
                 (fallback, "neutral", "查看任务", "show"),
             )
         if item.get("download_url"):
-            return "可下载", "info", "下载", "download"
+            return "可下载", "neutral", "下载", "download"
         return "无资源", "neutral", "无资源", "disabled"
 
     def _apply_filter(self, _value: Any = None) -> None:
@@ -836,8 +851,8 @@ class SubscriptionDetailView(QWidget):
 
     def _apply_responsive_layout(self, width: int, height: int) -> None:
         compact = width < 720
-        horizontal_margin = 18 if compact else 30
-        self.root_layout.setContentsMargins(horizontal_margin, 14, horizontal_margin, 18)
+        horizontal_margin = 14 if compact else 24
+        self.root_layout.setContentsMargins(horizontal_margin, 16, horizontal_margin, 0)
         self.notice.setVisible(height >= 600)
         compact_empty = height < 520
         self.empty.set_compact(compact_empty)
@@ -850,16 +865,6 @@ class SubscriptionDetailView(QWidget):
         self._update_header_action_mode(width < 520)
         self.header.subtitle.setVisible(show_secondary_header)
         self.metadata_widget.setVisible(show_secondary_header)
-        self.rules.setVisible(show_secondary_header)
-
-        stacked_header = width < 600
-        self.header_top.setDirection(
-            QBoxLayout.Direction.TopToBottom if stacked_header else QBoxLayout.Direction.LeftToRight
-        )
-        self.header_top.setAlignment(
-            self.header_actions,
-            Qt.AlignmentFlag.AlignLeft if stacked_header else Qt.AlignmentFlag.AlignVCenter,
-        )
 
         stacked_toolbar = width < 590
         if stacked_toolbar != self._toolbar_stacked:
@@ -887,7 +892,7 @@ class SubscriptionDetailView(QWidget):
             full_text = str(button.property("expandedText") or "")
             if compact:
                 button.setText("")
-                button.setFixedSize(38, 34)
+                button.setFixedSize(26, 26)
                 if not button.toolTip():
                     button.setToolTip(full_text)
             else:
@@ -913,7 +918,7 @@ class SubscriptionDetailView(QWidget):
                     action.setIcon(icon("refresh", c.text_muted, 16))
                 action.setText("")
                 action.setToolTip(full_tooltip or full_text)
-                action.setFixedSize(38, 34)
+                action.setFixedSize(26, 26)
             else:
                 action.setMinimumSize(100, 0)
                 action.setMaximumSize(16777215, 16777215)

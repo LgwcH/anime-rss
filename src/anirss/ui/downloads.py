@@ -66,8 +66,8 @@ class DownloadsPage(QWidget):
         self._remove_workers: set[FunctionWorker] = set()
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(30, 26, 30, 26)
-        layout.setSpacing(18)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
         layout.addWidget(PageHeader("下载", "内置下载器会自动接管匹配的种子与磁力链接"))
 
         toolbar = QHBoxLayout()
@@ -106,9 +106,8 @@ class DownloadsPage(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(
-            max(68, self.fontMetrics().height() * 3 + 16)
-        )
+        self.table.verticalHeader().setDefaultSectionSize(48)
+        self.table.horizontalHeader().setFixedHeight(30)
         self.table.cellDoubleClicked.connect(self._open_folder)
         header = self.table.horizontalHeader()
         header.setMinimumSectionSize(64)

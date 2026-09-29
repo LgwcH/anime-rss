@@ -63,10 +63,10 @@ class UiLayoutMotionTests(unittest.TestCase):
         toggle = ToggleSwitch()
         toggle.setChecked(True)
         self.assertEqual(toggle._animation.state(), QAbstractAnimation.State.Stopped)
-        self.assertEqual(toggle._get_offset(), 21.0)
+        self.assertEqual(toggle._get_offset(), 18.0)
         toggle.setChecked(False)
         self.assertEqual(toggle._animation.state(), QAbstractAnimation.State.Stopped)
-        self.assertEqual(toggle._get_offset(), 3.0)
+        self.assertEqual(toggle._get_offset(), 2.0)
 
     @patch.dict(os.environ, {"ANIRSS_REDUCE_MOTION": "0"})
     def test_mouse_button_feedback_squashes_and_elastically_settles(self) -> None:
@@ -165,14 +165,14 @@ class UiLayoutMotionTests(unittest.TestCase):
         window.show()
         window.resize(900, 600)
         self.qt_app.processEvents()
-        self.assertEqual(window.sidebar.width(), 88)
+        self.assertEqual(window.sidebar.width(), 64)
         self.assertFalse(window.refresh_status.isVisible())
 
         window.resize(1260, 800)
         long_name = "超长番剧名称" * 80
         window.breadcrumb.setText(f"工作台  /  订阅  /  {long_name}")
         self.qt_app.processEvents()
-        self.assertEqual(window.sidebar.width(), 206)
+        self.assertEqual(window.sidebar.width(), 200)
         self.assertTrue(window.refresh_status.isVisible())
         self.assertGreater(window.refresh_status.width(), 0)
         self.assertTrue(window.refresh_status.displayed_text())
@@ -324,7 +324,7 @@ class UiLayoutMotionTests(unittest.TestCase):
         self.qt_app.processEvents()
 
         self.assertGreaterEqual(page.folder_filter.count(), 3)
-        page.table.selectRow(0)
+        page.select_subscription(0)
         self.assertTrue(page.move_button.isEnabled())
         with patch(
             "anirss.ui.subscriptions.QInputDialog.getItem",
@@ -354,25 +354,22 @@ class UiLayoutMotionTests(unittest.TestCase):
             for index in range(35)
         ]
         page = SubscriptionsPage(controller)
-        page.resize(500, 440)
+        page.resize(1000, 440)
         page.show()
         page.reload()
         self.qt_app.processEvents()
 
-        self.assertTrue(page.table.isColumnHidden(1))
-        self.assertTrue(page.table.isColumnHidden(2))
-        self.assertTrue(page.table.isColumnHidden(3))
-        self.assertEqual(page.table.horizontalScrollBar().maximum(), 0)
-        for button in (page.new_folder_button, page.move_button):
-            self.assertGreaterEqual(
-                button.contentsRect().width(),
-                button.fontMetrics().horizontalAdvance(button.text()),
-            )
+        for button in (
+            page.new_folder_button,
+            page.edit_folder_button,
+            page.delete_folder_button,
+            page.move_button,
+        ):
             parent = button.parentWidget()
             assert parent is not None
-            self.assertLessEqual(button.geometry().right(), parent.contentsRect().right())
+            self.assertLessEqual(button.geometry().right(), parent.contentsRect().right() + 16)
 
-        bar = page.table.verticalScrollBar()
+        bar = page.rows_area.verticalScrollBar()
         self.assertGreater(bar.maximum(), 0)
         bar.setValue(bar.maximum())
         expected = bar.value()

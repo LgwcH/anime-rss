@@ -44,7 +44,7 @@ class SettingsGroup(QFrame):
         self.setObjectName("SettingsGroup")
         self._rows: list[tuple[QBoxLayout, QWidget]] = []
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(20, 17, 20, 17)
+        self.body.setContentsMargins(16, 14, 16, 14)
         self.body.setSpacing(0)
         heading = QLabel(title)
         heading.setTextFormat(Qt.TextFormat.PlainText)
@@ -127,8 +127,8 @@ class SettingsPage(QWidget):
         self._theme = "light"
         self._loaded: dict[str, Any] = {}
         root = QVBoxLayout(self)
-        root.setContentsMargins(30, 26, 20, 18)
-        root.setSpacing(16)
+        root.setContentsMargins(24, 20, 20, 18)
+        root.setSpacing(12)
 
         top = QHBoxLayout()
         top.addWidget(PageHeader("设置", "下载器、自动刷新和系统行为均可精细控制"))

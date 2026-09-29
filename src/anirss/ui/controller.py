@@ -117,7 +117,7 @@ class DemoController(QObject):
             {
                 "id": "apothecary",
                 "folder_id": "seasonal",
-                "name": "药屋少女的呢喃",
+                "name": "药屋少女的呢喃 第二季",
                 "rss_url": "https://example.com/kusuriya.xml",
                 "save_path": str(Path(base) / "药屋少女的呢喃"),
                 "include_keywords": ["1080P"],
@@ -127,6 +127,76 @@ class DemoController(QObject):
                 "enabled": True,
                 "last_update": "昨天 23:10",
                 "episode_count": 24,
+            },
+            {
+                "id": "oshinoko",
+                "folder_id": "seasonal",
+                "name": "我推的孩子 第三季",
+                "rss_url": "https://example.com/oshinoko.xml",
+                "save_path": str(Path(base) / "我推的孩子 第三季"),
+                "include_keywords": ["1080P", "简体"],
+                "exclude_keywords": ["720P"],
+                "episode_regex": r"\[(\d+)\]",
+                "auto_download": True,
+                "enabled": True,
+                "last_update": "今天 09:42",
+                "episode_count": 7,
+            },
+            {
+                "id": "spyfamily",
+                "folder_id": "seasonal",
+                "name": "间谍过家家 第三季",
+                "rss_url": "https://example.com/spyfamily.xml",
+                "save_path": str(Path(base) / "间谍过家家 第三季"),
+                "include_keywords": ["1080P"],
+                "exclude_keywords": [],
+                "episode_regex": r"\[(\d+)\]",
+                "auto_download": True,
+                "enabled": True,
+                "last_update": "今天 08:57",
+                "episode_count": 10,
+            },
+            {
+                "id": "dandadan",
+                "folder_id": None,
+                "name": "胆大党",
+                "rss_url": "https://garden.example.com/dandadan.xml",
+                "save_path": "",
+                "include_keywords": ["1080P"],
+                "exclude_keywords": [],
+                "episode_regex": r"\[(\d+)\]",
+                "auto_download": True,
+                "enabled": True,
+                "last_update": "今天 08:40",
+                "episode_count": 12,
+            },
+            {
+                "id": "dungeon",
+                "folder_id": None,
+                "name": "迷宫饭",
+                "rss_url": "https://garden.example.com/dungeon.xml",
+                "save_path": "",
+                "include_keywords": ["1080P"],
+                "exclude_keywords": [],
+                "episode_regex": r"\[(\d+)\]",
+                "auto_download": False,
+                "enabled": True,
+                "last_update": "今天 07:30",
+                "episode_count": 18,
+            },
+            {
+                "id": "bocchi",
+                "folder_id": None,
+                "name": "孤独摇滚 剧场版",
+                "rss_url": "https://dead.example.com/bocchi.xml",
+                "save_path": "",
+                "include_keywords": [],
+                "exclude_keywords": [],
+                "episode_regex": r"\[(\d+)\]",
+                "auto_download": True,
+                "enabled": False,
+                "last_update": "昨天 22:14",
+                "episode_count": 0,
             },
         ]
         self._downloads: list[dict[str, Any]] = [
@@ -159,11 +229,11 @@ class DemoController(QObject):
                 "title": "迷宫饭 [18] [1080P]",
                 "anime": "迷宫饭",
                 "episode": "18",
-                "status": "paused",
-                "progress": 31,
-                "speed": "—",
+                "status": "downloading",
+                "progress": 41,
+                "speed": "5.6 MB/s",
                 "size": "1.31 GB",
-                "eta": "已暂停",
+                "eta": "6 分 48 秒",
                 "path": str(Path(base) / "迷宫饭"),
             },
         ]
@@ -233,6 +303,37 @@ class DemoController(QObject):
                 },
             ],
         }
+        # 为演示订阅生成若干剧集条目, 让详情页与列表更接近真实使用状态。
+        for subscription_id, name, count, active_episode in (
+            ("oshinoko", "我推的孩子 第三季", 14, 7),
+            ("spyfamily", "间谍过家家 第三季", 10, None),
+            ("dandadan", "胆大党", 12, None),
+            ("dungeon", "迷宫饭", 18, 18),
+            ("bocchi", "孤独摇滚 剧场版", 1, None),
+        ):
+            entries: list[dict[str, Any]] = []
+            for episode in range(count, 0, -1):
+                task_id = None
+                if active_episode is not None and episode == active_episode:
+                    task_id = "dl-1" if subscription_id == "oshinoko" else "dl-3"
+                entries.append(
+                    {
+                        "id": f"{subscription_id}-{episode:02d}",
+                        "title": f"[LoliHouse] {name} - {episode:02d} (1080p HEVC).mkv",
+                        "episode": str(episode),
+                        "published_at": f"2026-09-{max(1, 26 - (count - episode) * 7):02d} 23:00",
+                        "description": "",
+                        "link": f"https://example.com/{subscription_id}/{episode}",
+                        "download_url": f"magnet:?xt=urn:btih:demo-{subscription_id}-{episode:02d}",
+                        "content_type": "application/x-bittorrent",
+                        "download_kind": "magnet",
+                        "matches_rules": True,
+                        "task_id": task_id,
+                        "task_status": None,
+                        "task_error": None,
+                    }
+                )
+            self._subscription_items[subscription_id] = entries
         self._settings: dict[str, Any] = {
             "download_directory": base,
             "max_concurrent_downloads": 3,
