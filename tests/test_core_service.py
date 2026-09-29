@@ -831,7 +831,7 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(partial.exists())
         self.assertTrue(unrelated.exists())
 
-    def test_remove_bt_task_refuses_automatic_file_deletion(self) -> None:
+    def test_remove_bt_task_without_manifest_keeps_files(self) -> None:
         subscription = self.service.save_subscription(
             {"name": "BT", "rss_url": "https://example.test/bt.xml"}
         )
@@ -845,20 +845,113 @@ class ServiceTests(unittest.TestCase):
             )
         )
         assert item.id is not None
+        directory = Path(self.temporary.name) / "bt-output"
+        directory.mkdir()
+        existing = directory / "BT one.mkv"
+        existing.write_bytes(b"done")
         task, _ = self.service.repository.add_download_task(
             DownloadTask(
                 subscription_id=subscription.id,
                 feed_item_id=item.id,
                 title=item.title,
                 source_url=item.download_url or "",
-                destination_directory=self.temporary.name,
+                destination_directory=str(directory),
                 filename="BT one",
                 kind=DownloadKind.MAGNET,
             )
         )
         assert task.id is not None
-        with self.assertRaisesRegex(ValueError, "cannot safely enumerate"):
+        with self.assertRaisesRegex(ValueError, "未记录它写盘的文件列表"):
             self.service.remove_task(task.id, delete_files=True)
+        self.assertIsNotNone(self.service.get_task(task.id))
+        self.assertTrue(existing.exists())
+
+    def test_remove_bt_task_with_manifest_deletes_exact_files(self) -> None:
+        subscription = self.service.save_subscription(
+            {"name": "BT", "rss_url": "https://example.test/bt-manifest.xml"}
+        )
+        assert subscription.id is not None
+        item, _ = self.service.repository.add_feed_item(
+            FeedItem(
+                subscription_id=subscription.id,
+                guid="bt-manifest",
+                title="BT manifest",
+                download_url="magnet:?xt=urn:btih:def",
+            )
+        )
+        assert item.id is not None
+        directory = Path(self.temporary.name) / "bt-manifest-output"
+        series = directory / "Series"
+        nested = series / "Season 1"
+        nested.mkdir(parents=True)
+        first = nested / "ep01.mkv"
+        second = series / "ep02.mkv"
+        residue = nested / "ep01.mkv.part"
+        unrelated = directory / "keep-me.mkv"
+        first.write_bytes(b"one")
+        second.write_bytes(b"two")
+        residue.write_bytes(b"partial")
+        unrelated.write_bytes(b"keep")
+        task, _ = self.service.repository.add_download_task(
+            DownloadTask(
+                subscription_id=subscription.id,
+                feed_item_id=item.id,
+                title=item.title,
+                source_url=item.download_url or "",
+                destination_directory=str(directory),
+                filename="BT manifest",
+                kind=DownloadKind.TORRENT,
+                file_manifest=("Series/Season 1/ep01.mkv", "Series/ep02.mkv"),
+            )
+        )
+        assert task.id is not None
+        self.assertTrue(self.service.remove_task(task.id, delete_files=True))
+        self.assertFalse(first.exists())
+        self.assertFalse(second.exists())
+        self.assertFalse(residue.exists())
+        # Directories emptied by the deletion are cleaned up, but only inside
+        # the task's own destination directory.
+        self.assertFalse(series.exists())
+        self.assertTrue(directory.exists())
+        self.assertTrue(unrelated.exists())
+        self.assertIsNone(self.service.get_task(task.id))
+
+    def test_remove_bt_task_manifest_escape_is_rejected(self) -> None:
+        subscription = self.service.save_subscription(
+            {"name": "BT", "rss_url": "https://example.test/bt-evil.xml"}
+        )
+        assert subscription.id is not None
+        item, _ = self.service.repository.add_feed_item(
+            FeedItem(
+                subscription_id=subscription.id,
+                guid="bt-evil",
+                title="BT evil",
+                download_url="magnet:?xt=urn:btih:ghi",
+            )
+        )
+        assert item.id is not None
+        directory = Path(self.temporary.name) / "bt-evil-output"
+        directory.mkdir()
+        inside = directory / "ep01.mkv"
+        inside.write_bytes(b"one")
+        outside = Path(self.temporary.name) / "outside.mkv"
+        outside.write_bytes(b"precious")
+        task, _ = self.service.repository.add_download_task(
+            DownloadTask(
+                subscription_id=subscription.id,
+                feed_item_id=item.id,
+                title=item.title,
+                source_url=item.download_url or "",
+                destination_directory=str(directory),
+                filename="BT evil",
+                kind=DownloadKind.MAGNET,
+                file_manifest=("ep01.mkv", "../outside.mkv"),
+            )
+        )
+        assert task.id is not None
+        with self.assertRaisesRegex(ValueError, "outside download root"):
+            self.service.remove_task(task.id, delete_files=True)
+        self.assertTrue(outside.exists())
         self.assertIsNotNone(self.service.get_task(task.id))
 
     def test_concurrency_resize_replaces_the_executor_while_running(self) -> None:

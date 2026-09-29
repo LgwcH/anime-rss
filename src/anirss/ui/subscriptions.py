@@ -1,25 +1,23 @@
-"""RSS subscription management page."""
+"""RSS subscription management page (08-compact-pro three-column layout)."""
 
 from __future__ import annotations
 
-import html
 from collections.abc import Sequence
 from contextlib import suppress
 from typing import Any
+from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView,
+    QButtonGroup,
     QComboBox,
     QFrame,
     QHBoxLayout,
-    QHeaderView,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMessageBox,
-    QStackedWidget,
-    QTableWidget,
-    QTableWidgetItem,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -33,13 +31,21 @@ from .subscription_detail import SubscriptionDetailView
 from .theme import colors
 from .widgets import (
     BadgeLabel,
-    ClickableElidedLabel,
+    CoverAvatar,
     ElidedLabel,
     EmptyState,
-    PageHeader,
+    IconRow,
+    clear_layout,
 )
 from .widgets import (
     JellyButton as QPushButton,
+)
+
+_FILTER_MODES = (
+    ("all", "全部"),
+    ("following", "追番中"),
+    ("record", "仅记录"),
+    ("disabled", "已停用"),
 )
 
 
@@ -47,12 +53,74 @@ def _dict(item: Any) -> dict[str, Any]:
     return as_mapping(item)
 
 
-def _keyword_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value[:2000]
-    if isinstance(value, Sequence):
-        return "、".join(str(part)[:200] for part in value[:100])[:2000]
-    return ""
+def _state_of(item: dict[str, Any]) -> tuple[str, str, str]:
+    """Return ``(filter_key, label, tone)`` for a subscription mapping."""
+
+    enabled = bool(item.get("enabled", True))
+    auto = bool(item.get("auto_download", item.get("download_enabled", True)))
+    if enabled and auto:
+        return "following", "追番中", "sub"
+    if enabled:
+        return "record", "仅记录", "wait"
+    return "disabled", "已停用", "done"
+
+
+def _host_of(item: dict[str, Any]) -> str:
+    url = str(item.get("rss_url") or item.get("url") or item.get("feed_url") or "")
+    return urlparse(url).netloc or url or "未知来源"
+
+
+class SubscriptionRow(IconRow):
+    """One subscription entry in the 320px list column."""
+
+    indicator_inset = 0
+
+    def __init__(self, item: dict[str, Any], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("SubRow")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 9, 16, 9)
+        layout.setSpacing(10)
+
+        self.cover = CoverAvatar(str(item.get("name") or "?"), 28)
+        self.cover.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.cover, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        mid = QVBoxLayout()
+        mid.setContentsMargins(0, 0, 0, 0)
+        mid.setSpacing(1)
+        name = ElidedLabel(str(item.get("name") or item.get("title") or "未命名番剧"))
+        name.setStyleSheet("font-size:13px; font-weight:600;")
+        name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        mid.addWidget(name)
+        meta = ElidedLabel(
+            f"{_host_of(item)} · {item.get('last_update') or '尚未刷新'!s}"
+        )
+        meta.setObjectName("Muted")
+        meta.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        mid.addWidget(meta)
+        layout.addLayout(mid, 1)
+
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(3)
+        count = item.get("episode_count")
+        progress = QLabel(f"{count} 集" if count is not None else "—")
+        progress.setStyleSheet("font-size:12px;")
+        progress.setObjectName("SubProgress")
+        progress.setAlignment(Qt.AlignmentFlag.AlignRight)
+        progress.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        right.addWidget(progress)
+        _key, label, tone = _state_of(item)
+        self.status = BadgeLabel(label, tone)
+        self.status.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        right.addWidget(self.status, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addLayout(right)
+        self.setFixedHeight(max(50, self.sizeHint().height()))
+
+    def set_theme(self, theme: str) -> None:
+        super().set_theme(theme)
+        self.status.set_theme(theme)
 
 
 class SubscriptionsPage(QWidget):
@@ -72,119 +140,134 @@ class SubscriptionsPage(QWidget):
         self._all_items: list[dict[str, Any]] = []
         self._items: list[dict[str, Any]] = []
         self._folders: list[dict[str, Any]] = []
+        self._rows: list[SubscriptionRow] = []
+        self._selected_row = -1
+        self._filter_mode = "all"
         self._detail_subscription_id: Any = None
         self._refreshing_subscription_id: Any = None
 
-        root_layout = QVBoxLayout(self)
+        root_layout = QHBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
-        self.route_stack = AnimatedStackedWidget()
-        self.list_view = QWidget()
-        layout = QVBoxLayout(self.list_view)
-        layout.setContentsMargins(30, 26, 30, 26)
-        layout.setSpacing(18)
-        top = QHBoxLayout()
-        top.addWidget(PageHeader("订阅", "点击番剧查看具体条目，并按需自主下载"))
-        top.addStretch()
-        self.add_button = QPushButton("新增订阅")
+
+        # ---------------- 列表栏 (320px) ----------------
+        list_panel = QFrame()
+        list_panel.setObjectName("ListPanel")
+        list_panel.setFixedWidth(320)
+        list_layout = QVBoxLayout(list_panel)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.setSpacing(0)
+
+        tools = QFrame()
+        tools.setObjectName("ListTools")
+        tools_layout = QVBoxLayout(tools)
+        tools_layout.setContentsMargins(16, 12, 16, 10)
+        tools_layout.setSpacing(8)
+        self.add_button = QPushButton("＋ 添加订阅")
         self.add_button.setProperty("primary", True)
-        self.add_button.setIcon(icon("plus", "#FFFFFF", 18))
+        self.add_button.setObjectName("BlockPrimary")
+        self.add_button.setFixedHeight(30)
         self.add_button.clicked.connect(self.add_subscription)
-        top.addWidget(self.add_button, 0, Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(top)
-
-        folder_panel = QFrame()
-        folder_panel.setObjectName("FolderToolbar")
-        folder_panel_layout = QVBoxLayout(folder_panel)
-        folder_panel_layout.setContentsMargins(12, 10, 12, 10)
-        folder_panel_layout.setSpacing(7)
-        folder_filter_row = QHBoxLayout()
-        folder_filter_row.setSpacing(8)
-        folder_label = QLabel("订阅文件夹")
-        folder_label.setTextFormat(Qt.TextFormat.PlainText)
-        folder_label.setStyleSheet("font-weight:600;")
-        folder_filter_row.addWidget(folder_label)
+        tools_layout.addWidget(self.add_button)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("搜索番名 / 字幕组")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(self._search_changed)
+        tools_layout.addWidget(self.search_edit)
+        folder_row = QHBoxLayout()
+        folder_row.setContentsMargins(0, 0, 0, 0)
+        folder_row.setSpacing(6)
         self.folder_filter = QComboBox()
-        self.folder_filter.setMinimumWidth(120)
-        self.folder_filter.setMaximumWidth(320)
+        self.folder_filter.setFixedHeight(26)
         self.folder_filter.currentIndexChanged.connect(self._folder_filter_changed)
-        folder_filter_row.addWidget(self.folder_filter, 1)
-        self.new_folder_button = QPushButton("新建文件夹")
-        self.new_folder_button.setIcon(icon("plus", "#717789", 17))
+        folder_row.addWidget(self.folder_filter, 1)
+        self.new_folder_button = QPushButton()
+        self.new_folder_button.setObjectName("IconButton")
+        self.new_folder_button.setFixedSize(26, 26)
+        self.new_folder_button.setToolTip("新建订阅文件夹")
         self.new_folder_button.clicked.connect(self.add_folder)
-        folder_filter_row.addWidget(self.new_folder_button)
-        folder_panel_layout.addLayout(folder_filter_row)
-
-        folder_action_row = QHBoxLayout()
-        folder_action_row.setSpacing(6)
-        self.folder_path = ElidedLabel("按文件夹筛选和整理订阅")
-        self.folder_path.setObjectName("Muted")
-        folder_action_row.addWidget(self.folder_path, 1)
+        folder_row.addWidget(self.new_folder_button)
         self.edit_folder_button = QPushButton()
-        self.edit_folder_button.setProperty("flat", True)
-        self.edit_folder_button.setFixedSize(36, 34)
+        self.edit_folder_button.setObjectName("IconButton")
+        self.edit_folder_button.setFixedSize(26, 26)
         self.edit_folder_button.setToolTip("编辑当前文件夹")
-        self.edit_folder_button.setIcon(icon("edit", "#717789", 17))
         self.edit_folder_button.clicked.connect(self.edit_current_folder)
-        folder_action_row.addWidget(self.edit_folder_button)
+        folder_row.addWidget(self.edit_folder_button)
         self.delete_folder_button = QPushButton()
-        self.delete_folder_button.setProperty("flat", True)
+        self.delete_folder_button.setObjectName("IconButton")
         self.delete_folder_button.setProperty("danger", True)
-        self.delete_folder_button.setFixedSize(36, 34)
+        self.delete_folder_button.setFixedSize(26, 26)
         self.delete_folder_button.setToolTip("删除当前文件夹")
-        self.delete_folder_button.setIcon(icon("delete", "#D84A5B", 17))
         self.delete_folder_button.clicked.connect(self.delete_current_folder)
-        folder_action_row.addWidget(self.delete_folder_button)
-        self.move_button = QPushButton("移动订阅")
-        self.move_button.setIcon(icon("folder", "#717789", 17))
+        folder_row.addWidget(self.delete_folder_button)
+        self.move_button = QPushButton()
+        self.move_button.setObjectName("IconButton")
+        self.move_button.setFixedSize(26, 26)
+        self.move_button.setToolTip("移动选中订阅到其他文件夹")
         self.move_button.setEnabled(False)
         self.move_button.clicked.connect(self.move_selected_subscription)
-        folder_action_row.addWidget(self.move_button)
-        folder_panel_layout.addLayout(folder_action_row)
-        layout.addWidget(folder_panel)
+        folder_row.addWidget(self.move_button)
+        tools_layout.addLayout(folder_row)
+        list_layout.addWidget(tools)
 
-        self.stack = QStackedWidget()
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(
-            ["番剧", "RSS 来源", "匹配规则", "保存位置", "状态", "操作"]
-        )
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setShowGrid(False)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(
-            max(68, self.fontMetrics().height() * 3 + 16)
-        )
-        header = self.table.horizontalHeader()
-        header.setMinimumSectionSize(76)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(4, 88)
-        self.table.setColumnWidth(5, 132)
-        self.table.cellDoubleClicked.connect(lambda row, _column: self.open_subscription(row))
-        self.table.itemSelectionChanged.connect(self._selection_changed)
-        self.stack.addWidget(self.table)
+        filter_bar = QFrame()
+        filter_bar.setObjectName("FilterBar")
+        filter_bar.setFixedHeight(32)
+        filter_layout = QHBoxLayout(filter_bar)
+        filter_layout.setContentsMargins(16, 0, 16, 0)
+        filter_layout.setSpacing(14)
+        self.filter_group = QButtonGroup(self)
+        self.filter_group.setExclusive(True)
+        self.filter_buttons: dict[str, QPushButton] = {}
+        for key, label in _FILTER_MODES:
+            button = QPushButton(label)
+            button.setObjectName("FilterTab")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(
+                lambda _checked=False, mode=key: self._set_filter_mode(mode)
+            )
+            self.filter_group.addButton(button)
+            self.filter_buttons[key] = button
+            filter_layout.addWidget(button)
+        filter_layout.addStretch()
+        self.filter_buttons["all"].setChecked(True)
+        list_layout.addWidget(filter_bar)
 
-        self.empty_card = QFrame()
-        self.empty_card.setObjectName("Card")
-        empty_layout = QVBoxLayout(self.empty_card)
-        self.empty = EmptyState(
-            "还没有 RSS 订阅",
-            "添加第一部番剧，AniRSS 会定时检查更新并为它创建独立文件夹。",
-            "添加第一个订阅",
+        self.rows_area = QScrollArea()
+        self.rows_area.setWidgetResizable(True)
+        self.rows_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.rows_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.rows_host = QWidget()
+        self.rows_layout = QVBoxLayout(self.rows_host)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.rows_layout.setSpacing(0)
+        self.rows_layout.addStretch()
+        self.rows_area.setWidget(self.rows_host)
+        list_layout.addWidget(self.rows_area, 1)
+
+        self.list_foot = QFrame()
+        self.list_foot.setObjectName("ListFooter")
+        foot_layout = QHBoxLayout(self.list_foot)
+        foot_layout.setContentsMargins(16, 10, 16, 10)
+        self.list_summary = ElidedLabel("")
+        self.list_summary.setObjectName("Muted")
+        foot_layout.addWidget(self.list_summary, 1)
+        list_layout.addWidget(self.list_foot)
+        root_layout.addWidget(list_panel)
+
+        # ---------------- 详情主区 ----------------
+        self.route_stack = AnimatedStackedWidget()
+        self.list_view = QWidget()
+        placeholder_layout = QVBoxLayout(self.list_view)
+        self.placeholder = EmptyState(
+            "选择左侧的订阅",
+            "这里会显示该番剧的剧集列表、匹配规则与下载状态。",
+            "添加订阅",
             "rss",
         )
-        self.empty.action_clicked.connect(self.add_subscription)
-        empty_layout.addWidget(self.empty)
-        self.stack.addWidget(self.empty_card)
-        layout.addWidget(self.stack, 1)
-
+        self.placeholder.action_clicked.connect(self.add_subscription)
+        placeholder_layout.addWidget(self.placeholder)
         self.route_stack.addWidget(self.list_view)
         self.detail_view = SubscriptionDetailView(self.controller)
         self.detail_view.back_requested.connect(self.show_subscription_list)
@@ -195,7 +278,17 @@ class SubscriptionsPage(QWidget):
         self.detail_view.message.connect(self.message.emit)
         self.detail_view.error.connect(self.error.emit)
         self.route_stack.addWidget(self.detail_view)
-        root_layout.addWidget(self.route_stack)
+        root_layout.addWidget(self.route_stack, 1)
+
+        self.empty = EmptyState(
+            "还没有 RSS 订阅",
+            "添加第一部番剧，AniRSS 会定时检查更新并为它创建独立文件夹。",
+            "添加第一个订阅",
+            "rss",
+        )
+        self.empty.action_clicked.connect(self.add_subscription)
+
+    # ------------------------------------------------------------- data flow
 
     def set_controller(self, controller: object | None) -> None:
         self.controller = controller
@@ -230,127 +323,27 @@ class SubscriptionsPage(QWidget):
         refresh_detail: bool = True,
         preserve_scroll: bool = True,
     ) -> None:
-        scroll_value = self.table.verticalScrollBar().value() if preserve_scroll else 0
+        scroll_value = self.rows_area.verticalScrollBar().value() if preserve_scroll else 0
         self._all_items = [_dict(item) for item in subscriptions]
         if folders is not None:
             self._folders = [_dict(folder) for folder in folders]
         self._update_folder_filter()
-        selected_folder = self.folder_filter.currentData()
-        if selected_folder == "__unfiled__":
-            self._items = [item for item in self._all_items if item.get("folder_id") is None]
-        elif selected_folder in {None, "__all__"}:
-            self._items = list(self._all_items)
-        else:
-            self._items = [
-                item for item in self._all_items if item.get("folder_id") == selected_folder
-            ]
-        self.table.setRowCount(0)
-        c = colors(self._theme)
-        for item in self._items:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            name = str(
-                item.get("name") or item.get("anime_name") or item.get("title") or "未命名番剧"
-            )[:2000]
-            episode_count = item.get("episode_count")
-            subtitle = f"已记录 {episode_count} 条" if episode_count is not None else "等待首次刷新"
-            name_widget = QWidget()
-            name_layout = QVBoxLayout(name_widget)
-            name_layout.setContentsMargins(7, 7, 5, 7)
-            name_layout.setSpacing(2)
-            name_label = ClickableElidedLabel(name)
-            name_label.clicked.connect(lambda r=row: self.open_subscription(r))
-            hint = ElidedLabel(subtitle)
-            hint.setObjectName("Muted")
-            hint.setStyleSheet(f"color:{c.text_muted};font-size:11px;")
-            name_layout.addWidget(name_label)
-            name_layout.addWidget(hint)
-            self.table.setCellWidget(row, 0, name_widget)
-
-            url = str(item.get("rss_url") or item.get("url") or item.get("feed_url") or "—")[:4000]
-            url_item = QTableWidgetItem(url)
-            url_item.setToolTip(html.escape(url))
-            url_item.setData(Qt.ItemDataRole.UserRole, item)
-            self.table.setItem(row, 1, url_item)
-
-            include = _keyword_text(
-                item.get("include_keywords", item.get("include_pattern", item.get("include", [])))
-            )
-            exclude = _keyword_text(
-                item.get("exclude_keywords", item.get("exclude_pattern", item.get("exclude", [])))
-            )
-            rules = f"包含：{include or '不限'}\n排除：{exclude or '无'}"
-            rule_item = QTableWidgetItem(rules)
-            rule_item.setToolTip(
-                html.escape(f"{rules}\n集数：{item.get('episode_regex') or '默认规则'}")
-            )
-            self.table.setItem(row, 2, rule_item)
-
-            path = str(
-                item.get("resolved_save_path")
-                or item.get("save_path")
-                or item.get("save_directory")
-                or item.get("directory_name")
-                or "使用全局目录"
-            )[:4000]
-            path_item = QTableWidgetItem(path)
-            path_item.setToolTip(html.escape(path))
-            self.table.setItem(row, 3, path_item)
-
-            enabled = bool(item.get("enabled", True))
-            auto = bool(item.get("auto_download", item.get("download_enabled", True)))
-            state_text = "自动下载" if enabled and auto else "仅记录" if enabled else "已停用"
-            state_tone = "success" if enabled and auto else "info" if enabled else "neutral"
-            badge = BadgeLabel(state_text, state_tone)
-            if enabled and not auto:
-                badge.setToolTip("新条目只写入去重记录，不创建任务或发送下载通知。")
-            badge.set_theme(self._theme)
-            state_cell = QWidget()
-            state_layout = QHBoxLayout(state_cell)
-            state_layout.setContentsMargins(5, 0, 5, 0)
-            state_layout.addWidget(badge)
-            self.table.setCellWidget(row, 4, state_cell)
-
-            actions = QWidget()
-            action_layout = QHBoxLayout(actions)
-            action_layout.setContentsMargins(3, 0, 3, 0)
-            action_layout.setSpacing(1)
-            view = QPushButton()
-            view.setProperty("flat", True)
-            view.setToolTip("查看订阅内容")
-            view.setFixedSize(36, 34)
-            view.setIcon(icon("search", c.accent, 18))
-            view.clicked.connect(lambda _checked=False, r=row: self.open_subscription(r))
-            edit = QPushButton()
-            edit.setProperty("flat", True)
-            edit.setToolTip("编辑订阅")
-            edit.setFixedSize(36, 34)
-            edit.setIcon(icon("edit", c.text_muted, 18))
-            edit.clicked.connect(lambda _checked=False, r=row: self.edit_subscription(r))
-            remove = QPushButton()
-            remove.setProperty("flat", True)
-            remove.setProperty("danger", True)
-            remove.setToolTip("删除订阅")
-            remove.setFixedSize(36, 34)
-            remove.setIcon(icon("delete", c.danger, 18))
-            remove.clicked.connect(lambda _checked=False, r=row: self.delete_subscription(r))
-            action_layout.addWidget(view)
-            action_layout.addWidget(edit)
-            action_layout.addWidget(remove)
-            self.table.setCellWidget(row, 5, actions)
-        self.stack.setCurrentWidget(self.table if self._items else self.empty_card)
-        self._update_responsive_columns(self.width())
-        self._selection_changed()
+        self._apply_filters()
+        self._render_rows()
         if preserve_scroll:
             QTimer.singleShot(
                 0,
-                lambda value=scroll_value: self.table.verticalScrollBar().setValue(
-                    min(value, self.table.verticalScrollBar().maximum())
+                lambda value=scroll_value: self.rows_area.verticalScrollBar().setValue(
+                    min(value, self.rows_area.verticalScrollBar().maximum())
                 ),
             )
         if self._detail_subscription_id is not None:
             current = next(
-                (item for item in self._items if item.get("id") == self._detail_subscription_id),
+                (
+                    item
+                    for item in self._all_items
+                    if item.get("id") == self._detail_subscription_id
+                ),
                 None,
             )
             if current is None:
@@ -360,6 +353,105 @@ class SubscriptionsPage(QWidget):
                 self.detail_view.set_refreshing(self._refreshing_subscription_id)
                 if self.detail_active:
                     self.route_changed.emit(str(current.get("name") or "订阅详情"))
+
+    def _apply_filters(self) -> None:
+        selected_folder = self.folder_filter.currentData()
+        query = self.search_edit.text().strip().casefold()
+        items: list[dict[str, Any]] = []
+        for item in self._all_items:
+            if selected_folder == "__unfile__":
+                if item.get("folder_id") is not None:
+                    continue
+            elif (
+                selected_folder not in {None, "__all__"}
+                and item.get("folder_id") != selected_folder
+            ):
+                continue
+            filter_key, _label, _tone = _state_of(item)
+            if self._filter_mode != "all" and filter_key != self._filter_mode:
+                continue
+            if query:
+                include = item.get("include_keywords") or []
+                if isinstance(include, str):
+                    include = [include]
+                blob = " ".join(
+                    [
+                        str(item.get("name") or ""),
+                        str(item.get("rss_url") or ""),
+                        " ".join(str(word) for word in include),
+                    ]
+                ).casefold()
+                if query not in blob:
+                    continue
+            items.append(item)
+        self._items = items
+
+    def _render_rows(self) -> None:
+        self.rows_layout.removeWidget(self.empty)
+        self.empty.hide()
+        clear_layout(self.rows_layout)
+        self._rows = []
+        counts = {"all": len(self._all_items)}
+        for item in self._all_items:
+            key, _label, _tone = _state_of(item)
+            counts[key] = counts.get(key, 0) + 1
+        for key, label in _FILTER_MODES:
+            self.filter_buttons[key].setText(f"{label} {counts.get(key, 0)}")
+        for index, item in enumerate(self._items):
+            row = SubscriptionRow(item)
+            row.set_theme(self._theme)
+            row.clicked.connect(lambda _checked=False, r=index: self.open_subscription(r))
+            self._rows.append(row)
+            self.rows_layout.addWidget(row)
+        if not self._items:
+            if self._all_items:
+                self.empty.set_content(
+                    "没有符合条件的订阅",
+                    "换一个搜索词、文件夹或状态筛选，即可重新查看订阅。",
+                )
+            else:
+                self.empty.set_content(
+                    "还没有 RSS 订阅",
+                    "添加第一部番剧，AniRSS 会定时检查更新并为它创建独立文件夹。",
+                )
+            self.rows_layout.addWidget(self.empty)
+            self.empty.show()
+        self.rows_layout.addStretch()
+        self.rows_layout.activate()
+        self.rows_host.setMinimumHeight(self.rows_layout.sizeHint().height())
+        folder_count = len(self._folders)
+        sources = len({_host_of(item) for item in self._all_items})
+        self.list_summary.setText(
+            f"{len(self._all_items)} 个订阅 · {sources} 个 RSS 源 · {folder_count} 个文件夹"
+        )
+        selected_id = self._detail_subscription_id
+        self._selected_row = next(
+            (
+                index
+                for index, item in enumerate(self._items)
+                if selected_id is not None and item.get("id") == selected_id
+            ),
+            -1,
+        )
+        for index, row in enumerate(self._rows):
+            row.blockSignals(True)
+            row.setChecked(index == self._selected_row)
+            row.blockSignals(False)
+        self.move_button.setEnabled(0 <= self._selected_row < len(self._items))
+
+    def _set_filter_mode(self, mode: str) -> None:
+        self._filter_mode = mode
+        self._apply_filters()
+        self._render_rows()
+
+    def _search_changed(self, _text: str) -> None:
+        self._apply_filters()
+        self._render_rows()
+
+    def apply_search(self, query: str) -> None:
+        self.search_edit.setText(query)
+        if self._items:
+            self.open_subscription(0)
 
     def _update_folder_filter(self) -> None:
         selected = self.folder_filter.currentData()
@@ -386,22 +478,10 @@ class SubscriptionsPage(QWidget):
         is_folder = current_folder is not None
         self.edit_folder_button.setEnabled(is_folder)
         self.delete_folder_button.setEnabled(is_folder)
-        if current_folder is not None:
-            self.folder_path.setText(
-                f"下载根目录：{current_folder.get('download_directory') or '尚未设置'}"
-            )
-        elif self.folder_filter.currentData() == "__unfiled__":
-            self.folder_path.setText("未分类订阅使用全局下载目录")
-        else:
-            self.folder_path.setText("按文件夹筛选和整理订阅")
 
     def _folder_filter_changed(self, _index: int | None = None) -> None:
-        self.set_subscriptions(
-            self._all_items,
-            folders=self._folders,
-            refresh_detail=False,
-            preserve_scroll=False,
-        )
+        self._apply_filters()
+        self._render_rows()
 
     def _current_folder(self) -> dict[str, Any] | None:
         folder_id = self.folder_filter.currentData()
@@ -410,13 +490,21 @@ class SubscriptionsPage(QWidget):
             None,
         )
 
-    def _selection_changed(self) -> None:
-        self.move_button.setEnabled(0 <= self.table.currentRow() < len(self._items))
+    # ------------------------------------------------------------- selection
+
+    def select_subscription(self, row: int) -> None:
+        self.open_subscription(row)
 
     def open_subscription(self, row: int) -> None:
         if not 0 <= row < len(self._items):
             return
         item = self._items[row]
+        self._selected_row = row
+        for index, row_widget in enumerate(self._rows):
+            row_widget.blockSignals(True)
+            row_widget.setChecked(index == row)
+            row_widget.blockSignals(False)
+        self.move_button.setEnabled(True)
         self._detail_subscription_id = item.get("id")
         self.route_stack.transition_to_widget(self.detail_view)
         self.detail_view.set_subscription(item)
@@ -425,6 +513,12 @@ class SubscriptionsPage(QWidget):
 
     def show_subscription_list(self) -> None:
         self._detail_subscription_id = None
+        self._selected_row = -1
+        for row_widget in self._rows:
+            row_widget.blockSignals(True)
+            row_widget.setChecked(False)
+            row_widget.blockSignals(False)
+        self.move_button.setEnabled(False)
         self.route_stack.transition_to_widget(self.list_view)
         self.route_changed.emit("")
 
@@ -442,6 +536,8 @@ class SubscriptionsPage(QWidget):
         refresh_current = self.detail_active and self._detail_subscription_id == subscription_id
         self.reload(refresh_detail=refresh_current)
         self.detail_view.set_refreshing(self._refreshing_subscription_id)
+
+    # --------------------------------------------------------------- actions
 
     def _default_directory(self) -> str:
         try:
@@ -514,7 +610,7 @@ class SubscriptionsPage(QWidget):
             self.error.emit(f"删除订阅文件夹失败：{exc}")
 
     def move_selected_subscription(self) -> None:
-        row = self.table.currentRow()
+        row = self._selected_row
         if not 0 <= row < len(self._items):
             self.message.emit("请先选择要移动的订阅")
             return
@@ -650,21 +746,17 @@ class SubscriptionsPage(QWidget):
     def set_theme(self, theme: str) -> None:
         self._theme = theme
         c = colors(theme)
-        self.new_folder_button.setIcon(icon("plus", c.text_muted, 17))
-        self.edit_folder_button.setIcon(icon("edit", c.text_muted, 17))
-        self.delete_folder_button.setIcon(icon("delete", c.danger, 17))
-        self.move_button.setIcon(icon("folder", c.text_muted, 17))
+        self.new_folder_button.setIcon(icon("plus", c.text2, 14))
+        self.edit_folder_button.setIcon(icon("edit", c.text2, 14))
+        self.delete_folder_button.setIcon(icon("delete", c.danger, 14))
+        self.move_button.setIcon(icon("folder", c.text2, 14))
         self.empty.set_theme(theme)
+        self.placeholder.set_theme(theme)
         self.detail_view.set_theme(theme)
-        if self._all_items:
-            self.set_subscriptions(self._all_items, folders=self._folders)
+        for row in self._rows:
+            row.set_theme(theme)
 
     def resizeEvent(self, event: Any) -> None:
         super().resizeEvent(event)
         self.empty.set_compact(event.size().height() < 520)
-        self._update_responsive_columns(event.size().width())
-
-    def _update_responsive_columns(self, width: int) -> None:
-        self.table.setColumnHidden(1, width < 860)
-        self.table.setColumnHidden(2, width < 1040)
-        self.table.setColumnHidden(3, width < 720)
+        self.placeholder.set_compact(event.size().height() < 520)

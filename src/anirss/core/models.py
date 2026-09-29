@@ -144,6 +144,10 @@ class DownloadTask:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     updated_at: datetime = field(default_factory=utc_now)
+    # Paths (relative to destination_directory, POSIX separators) of every
+    # file a BT download wrote; recorded at completion so remove_task can
+    # delete precisely.  HTTP tasks leave this empty (filename is enough).
+    file_manifest: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, DownloadKind):
@@ -155,6 +159,7 @@ class DownloadTask:
             raise ValueError("downloaded_bytes cannot be negative")
         if self.total_bytes is not None and self.total_bytes < 0:
             raise ValueError("total_bytes cannot be negative")
+        self.file_manifest = tuple(str(entry) for entry in self.file_manifest)
 
 
 @dataclass(slots=True)

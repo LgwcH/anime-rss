@@ -85,7 +85,7 @@ class SubscriptionDialog(QDialog):
         title = QLabel(self.windowTitle())
         title.setTextFormat(Qt.TextFormat.PlainText)
         title.setObjectName("PageTitle")
-        title.setStyleSheet("font-size:20px;")
+        title.setStyleSheet("font-size:14px;")
         outer.addWidget(title)
         detail = QLabel("为这部番剧设置 RSS 来源、匹配规则与保存位置。")
         detail.setTextFormat(Qt.TextFormat.PlainText)
@@ -386,7 +386,7 @@ class SubscriptionFolderDialog(QDialog):
         title = QLabel(self.windowTitle())
         title.setTextFormat(Qt.TextFormat.PlainText)
         title.setObjectName("PageTitle")
-        title.setStyleSheet("font-size:20px;")
+        title.setStyleSheet("font-size:14px;")
         layout.addWidget(title)
         detail = QLabel("文件夹用于整理订阅，并为其中的番剧提供默认下载根目录。")
         detail.setTextFormat(Qt.TextFormat.PlainText)
@@ -483,7 +483,10 @@ class RemoveDownloadDialog(QMessageBox):
         self.setTextFormat(Qt.TextFormat.PlainText)
         display_title = title if len(title) <= 120 else f"{title[:117]}…"
         self.setText(f"确定要移除“{display_title}”吗？")
-        self.setInformativeText("任务将从列表中移除；你可以选择同时删除已下载文件。")
+        self.setInformativeText(
+            "任务将从列表中移除；勾选后同时删除已下载到磁盘的文件"
+            "（BT 任务会删除其下载的全部文件）。"
+        )
         self.delete_files = QCheckBox("同时删除已下载文件")
         self.setCheckBox(self.delete_files)
         self.setStandardButtons(QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok)
