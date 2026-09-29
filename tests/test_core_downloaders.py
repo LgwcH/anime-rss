@@ -489,6 +489,100 @@ class DownloaderTests(unittest.TestCase):
             kind=DownloadKind.MAGNET,
         )
 
+    def test_completed_torrent_reports_its_file_manifest(self) -> None:
+        class Storage:
+            def num_files(self) -> int:
+                return 2
+
+            def file_path(self, index: int) -> str:
+                return ("Series/Season 1/ep01.mkv", "Series/ep02.mkv")[index]
+
+        class TorrentInfo:
+            def files(self) -> Storage:
+                return Storage()
+
+        class Status:
+            progress = 1.0
+            total_wanted_done = len(PAYLOAD)
+            total_wanted = len(PAYLOAD)
+            is_seeding = True
+            errc = None
+
+        class Handle:
+            def status(self) -> Status:
+                return Status()
+
+            def torrent_file(self) -> TorrentInfo:
+                return TorrentInfo()
+
+            def pause(self) -> None:
+                return None
+
+            def resume(self) -> None:
+                return None
+
+        class Params:
+            save_path = ""
+
+        class Session:
+            def apply_settings(self, _settings: object) -> None:
+                return None
+
+            def add_torrent(self, _parameters: object) -> Handle:
+                return Handle()
+
+            def remove_torrent(self, _handle: Handle) -> None:
+                return None
+
+        class FakeLibtorrent:
+            @staticmethod
+            def session() -> Session:
+                return Session()
+
+            @staticmethod
+            def load_torrent_buffer(_data: bytes) -> Params:
+                return Params()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                task = DownloadTask(
+                    subscription_id=1,
+                    feed_item_id=1,
+                    title="Torrent",
+                    source_url=f"http://127.0.0.1:{port}/download.php?id=1",
+                    destination_directory=temporary,
+                    filename="episode.torrent",
+                    kind=DownloadKind.TORRENT,
+                )
+                with patch.object(
+                    LibtorrentDownloader,
+                    "_load_libtorrent",
+                    return_value=FakeLibtorrent,
+                ):
+                    result = LibtorrentDownloader().download(
+                        task,
+                        AppSettings(download_root=temporary),
+                        DownloadControl(),
+                    )
+                self.assertEqual(
+                    result.files,
+                    ("Series/Season 1/ep01.mkv", "Series/ep02.mkv"),
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_file_manifest_is_empty_without_torrent_file_api(self) -> None:
+        class HandleWithoutInfo:
+            pass
+
+        self.assertEqual(LibtorrentDownloader._collect_file_manifest(HandleWithoutInfo()), ())
+
     def test_seeding_releases_the_worker_and_the_reaper_retires_the_handle(self) -> None:
         FakeLibtorrent, _Session = self._seeding_fakes()
         with tempfile.TemporaryDirectory() as temporary:

@@ -315,6 +315,25 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(stale.status, DownloadStatus.COMPLETED)
         self.assertEqual(stale.progress, 1.0)
 
+    def test_download_task_file_manifest_round_trip(self) -> None:
+        task = self._new_task()
+        assert task.id is not None
+        self.assertEqual(task.file_manifest, ())
+        updated = self.repository.update_download_task_fields(
+            task.id,
+            file_manifest=["Series/Season 1/ep01.mkv", "Series/ep02.mkv"],
+        )
+        self.assertEqual(
+            updated.file_manifest,
+            ("Series/Season 1/ep01.mkv", "Series/ep02.mkv"),
+        )
+        reloaded = self.repository.get_download_task(task.id)
+        assert reloaded is not None
+        self.assertEqual(reloaded.file_manifest, updated.file_manifest)
+        # A full-row save keeps the manifest instead of dropping it.
+        kept = self.repository.save_download_task(reloaded)
+        self.assertEqual(kept.file_manifest, updated.file_manifest)
+
     def test_field_update_validates_fields_and_task_existence(self) -> None:
         task = self._new_task()
         assert task.id is not None

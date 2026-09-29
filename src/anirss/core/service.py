@@ -746,19 +746,22 @@ class AniRSSService:
         return updated
 
     def remove_task(self, task_id: int, *, delete_files: bool = False) -> bool:
-        """Remove task metadata and optionally its exact HTTP output files.
+        """Remove task metadata and optionally the files it wrote.
 
-        Torrent/magnet payloads may span many files and directories that are
-        not represented by ``DownloadTask.filename``.  AniRSS therefore
-        refuses automatic BT file deletion instead of risking removal of an
-        entire series directory.
+        HTTP payloads are single files identified by ``DownloadTask.filename``.
+        Torrent/magnet payloads span many files, so they are deleted from the
+        ``file_manifest`` recorded when the download completed.  BT tasks
+        created before manifests existed keep their files: automatic deletion
+        without a manifest could erase an entire series directory.
         """
 
         task = self._require_task(task_id)
-        if delete_files and task.kind in {DownloadKind.TORRENT, DownloadKind.MAGNET}:
+        is_bt = task.kind in {DownloadKind.TORRENT, DownloadKind.MAGNET}
+        if delete_files and is_bt and not task.file_manifest:
             raise ValueError(
-                "AniRSS cannot safely enumerate every file in this BT task; "
-                "remove its metadata only and review downloaded files manually"
+                "无法自动删除文件：该任务由旧版本下载，未记录它写盘的文件列表，"
+                "为避免误删已保留全部文件。请打开所在文件夹手动删除后，"
+                "再选择“仅移除任务记录”"
             )
         with self._state_lock:
             control = self._controls.get(task_id)
@@ -777,7 +780,10 @@ class AniRSSService:
                     "download worker did not stop in time; files and metadata were kept"
                 ) from exc
         if delete_files:
-            self._delete_http_task_files(task)
+            if is_bt:
+                self._delete_bt_task_files(task)
+            else:
+                self._delete_http_task_files(task)
         deleted = self.repository.delete_download_task(task_id)
         if deleted:
             self._emit(
@@ -811,6 +817,36 @@ class AniRSSService:
                 path.unlink(missing_ok=True)
             except OSError as exc:
                 raise RuntimeError(f"could not delete download file {path}: {exc}") from exc
+
+    @staticmethod
+    def _delete_bt_task_files(task: DownloadTask) -> None:
+        """Delete exactly the files listed in the task's recorded manifest.
+
+        Every entry is re-validated against the destination directory, so a
+        corrupted or hostile manifest cannot delete anything outside it.
+        Afterwards, directories emptied by the deletion are removed, but only
+        up to (never including) the task's own destination directory.
+        """
+
+        directory = Path(task.destination_directory).expanduser().resolve()
+        parents: set[Path] = set()
+        for relative in task.file_manifest:
+            target = ensure_within_root(directory, directory / relative)
+            partial = ensure_within_root(directory, target.with_name(target.name + ".part"))
+            for path in (target, partial):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    raise RuntimeError(f"could not delete download file {path}: {exc}") from exc
+            parents.add(target.parent)
+        for folder in sorted(parents, key=lambda path: len(path.parts), reverse=True):
+            current = folder
+            while current != directory and directory in current.parents:
+                try:
+                    current.rmdir()
+                except OSError:
+                    break
+                current = current.parent
 
     def _submit_task_locked(self, task: DownloadTask) -> None:
         assert task.id is not None
@@ -902,6 +938,7 @@ class AniRSSService:
                     total_bytes=result.total_bytes,
                     completed_at=utc_now(),
                     error=None,
+                    **({"file_manifest": list(result.files)} if result.files else {}),
                 )
             except KeyError:
                 return

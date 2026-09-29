@@ -34,6 +34,25 @@ def _datetime_from_text(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
+def _manifest_to_text(manifest: Sequence[str] | str | None) -> str | None:
+    if manifest is None or isinstance(manifest, str):
+        return manifest
+    entries = [str(entry) for entry in manifest if str(entry).strip()]
+    return json.dumps(entries, ensure_ascii=False) if entries else None
+
+
+def _manifest_from_text(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    try:
+        raw = json.loads(value)
+    except ValueError:
+        return ()
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(entry) for entry in raw)
+
+
 class SQLiteRepository:
     """A small serialized repository around one SQLite connection.
 
@@ -128,6 +147,7 @@ class SQLiteRepository:
                     downloaded_bytes INTEGER NOT NULL DEFAULT 0,
                     total_bytes INTEGER,
                     error TEXT,
+                    file_manifest TEXT,
                     created_at TEXT NOT NULL,
                     started_at TEXT,
                     completed_at TEXT,
@@ -179,6 +199,11 @@ class SQLiteRepository:
             }
             if "content_type" not in feed_columns:
                 connection.execute("ALTER TABLE feed_items ADD COLUMN content_type TEXT")
+            task_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(download_tasks)")
+            }
+            if "file_manifest" not in task_columns:
+                connection.execute("ALTER TABLE download_tasks ADD COLUMN file_manifest TEXT")
             row = connection.execute("SELECT 1 FROM app_settings WHERE id = 1").fetchone()
             if row is None:
                 connection.execute(
@@ -536,9 +561,9 @@ class SQLiteRepository:
                 INSERT INTO download_tasks(
                     subscription_id, feed_item_id, title, source_url,
                     destination_directory, filename, kind, status, progress,
-                    downloaded_bytes, total_bytes, error, created_at,
-                    started_at, completed_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    downloaded_bytes, total_bytes, error, file_manifest,
+                    created_at, started_at, completed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._task_values(task),
             )
@@ -555,9 +580,9 @@ class SQLiteRepository:
                     INSERT INTO download_tasks(
                         subscription_id, feed_item_id, title, source_url,
                         destination_directory, filename, kind, status, progress,
-                        downloaded_bytes, total_bytes, error, created_at,
-                        started_at, completed_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        downloaded_bytes, total_bytes, error, file_manifest,
+                        created_at, started_at, completed_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     self._task_values(task),
                 )
@@ -648,8 +673,8 @@ class SQLiteRepository:
                     subscription_id = ?, feed_item_id = ?, title = ?,
                     source_url = ?, destination_directory = ?, filename = ?,
                     kind = ?, status = ?, progress = ?, downloaded_bytes = ?,
-                    total_bytes = ?, error = ?, created_at = ?, started_at = ?,
-                    completed_at = ?, updated_at = ?
+                    total_bytes = ?, error = ?, file_manifest = ?, created_at = ?,
+                    started_at = ?, completed_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (*self._task_values(task), task_id),
@@ -816,6 +841,7 @@ class SQLiteRepository:
             started_at=_datetime_from_text(row["started_at"]),
             completed_at=_datetime_from_text(row["completed_at"]),
             updated_at=_datetime_from_text(row["updated_at"]),  # type: ignore[arg-type]
+            file_manifest=_manifest_from_text(row["file_manifest"]),
         )
 
     @staticmethod
@@ -824,6 +850,8 @@ class SQLiteRepository:
             return value.value
         if field_name in {"started_at", "completed_at", "updated_at"}:
             return _datetime_to_text(cast("datetime | None", value))
+        if field_name == "file_manifest":
+            return _manifest_to_text(cast("Sequence[str] | str | None", value))
         return value
 
     @staticmethod
@@ -841,6 +869,7 @@ class SQLiteRepository:
             task.downloaded_bytes,
             task.total_bytes,
             task.error,
+            _manifest_to_text(task.file_manifest),
             _datetime_to_text(task.created_at),
             _datetime_to_text(task.started_at),
             _datetime_to_text(task.completed_at),

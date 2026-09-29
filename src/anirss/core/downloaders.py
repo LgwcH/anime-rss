@@ -39,6 +39,9 @@ class DownloadResult:
     path: Path
     downloaded_bytes: int
     total_bytes: int | None
+    # BT payloads: every file written, relative to the destination directory
+    # with POSIX separators.  Empty for HTTP downloads.
+    files: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -486,6 +489,7 @@ class LibtorrentDownloader:
         paused = False
         downloaded = 0
         total: int | None = None
+        manifest: tuple[str, ...] = ()
         metadata_started_at = time.monotonic()
         last_activity_at = metadata_started_at
         last_downloaded = 0
@@ -563,6 +567,9 @@ class LibtorrentDownloader:
                 if is_seeding or progress >= 1.0:
                     break
                 time.sleep(self.poll_seconds)
+            # Collect while the handle is still valid; the finally block may
+            # remove it from the session before we return.
+            manifest = self._collect_file_manifest(handle)
             seed_seconds = settings.seed_time_minutes * 60 if settings.seed_after_completion else 0
             if seed_seconds > 0:
                 # The worker returns as soon as the payload is complete so a
@@ -582,7 +589,36 @@ class LibtorrentDownloader:
 
         if progress_callback:
             progress_callback(downloaded, total or downloaded, 1.0)
-        return DownloadResult(directory, downloaded, total or downloaded)
+        return DownloadResult(directory, downloaded, total or downloaded, files=manifest)
+
+    @staticmethod
+    def _collect_file_manifest(handle: Any) -> tuple[str, ...]:
+        """List every payload file of a finished torrent, relative to its save path.
+
+        The manifest is persisted by the service so a later ``remove_task``
+        can delete exactly these files.  Enumeration is best-effort: a
+        libtorrent without the expected API simply yields an empty tuple and
+        the deletion path falls back to refusing with a clear message.
+        """
+
+        torrent_file = getattr(handle, "torrent_file", None)
+        if not callable(torrent_file):
+            return ()
+        try:
+            info = torrent_file()
+            if info is None:
+                return ()
+            storage = info.files()
+            count = int(storage.num_files())
+            paths = [str(storage.file_path(index)) for index in range(count)]
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return ()
+        cleaned: list[str] = []
+        for raw in paths:
+            normalized = raw.replace("\\", "/").strip("/")
+            if normalized:
+                cleaned.append(normalized)
+        return tuple(cleaned)
 
     @staticmethod
     def _fetch_torrent_metadata(
