@@ -93,9 +93,7 @@ class SubscriptionRow(IconRow):
         name.setStyleSheet("font-size:13px; font-weight:600;")
         name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         mid.addWidget(name)
-        meta = ElidedLabel(
-            f"{_host_of(item)} · {item.get('last_update') or '尚未刷新'!s}"
-        )
+        meta = ElidedLabel(f"{_host_of(item)} · {item.get('last_update') or '尚未刷新'!s}")
         meta.setObjectName("Muted")
         meta.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         mid.addWidget(meta)
@@ -224,9 +222,7 @@ class SubscriptionsPage(QWidget):
             button.setObjectName("FilterTab")
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(
-                lambda _checked=False, mode=key: self._set_filter_mode(mode)
-            )
+            button.clicked.connect(lambda _checked=False, mode=key: self._set_filter_mode(mode))
             self.filter_group.addButton(button)
             self.filter_buttons[key] = button
             filter_layout.addWidget(button)

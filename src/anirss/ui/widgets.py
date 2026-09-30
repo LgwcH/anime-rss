@@ -578,9 +578,7 @@ class IconRow(QAbstractButton):
             inset = self.indicator_inset
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(c.accent))
-            painter.drawRoundedRect(
-                QRectF(0, inset, 2, max(1, self.height() - 2 * inset)), 1, 1
-            )
+            painter.drawRoundedRect(QRectF(0, inset, 2, max(1, self.height() - 2 * inset)), 1, 1)
         painter.end()
 
 
@@ -782,9 +780,7 @@ class Sidebar(QFrame):
         for label in self._group_labels:
             label.setVisible(not compact)
         self.footer.setVisible(not compact)
-        self._layout.setContentsMargins(
-            6 if compact else 8, 12, 6 if compact else 8, 8
-        )
+        self._layout.setContentsMargins(6 if compact else 8, 12, 6 if compact else 8, 8)
         for button in self.buttons:
             button.set_compact(compact)
         QTimer.singleShot(0, self._sync_indicator)
@@ -902,6 +898,4 @@ class EmptyState(QWidget):
         self._theme = theme
         c = colors(theme)
         self.icon_label.setPixmap(icon(self._icon_name, c.text3, 18).pixmap(18, 18))
-        self.icon_label.setStyleSheet(
-            f"background:{c.track}; border-radius:{8}px;"
-        )
+        self.icon_label.setStyleSheet(f"background:{c.track}; border-radius:{8}px;")

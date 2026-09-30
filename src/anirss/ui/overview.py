@@ -350,9 +350,7 @@ class OverviewPage(QWidget):
     def reload(self) -> None:
         try:
             snapshot = controller_call(self.controller, "dashboard_snapshot", default=None)
-            subscriptions = (
-                controller_call(self.controller, "list_subscriptions", default=[]) or []
-            )
+            subscriptions = controller_call(self.controller, "list_subscriptions", default=[]) or []
             tasks = controller_call(self.controller, "list_downloads", None, default=[]) or []
             normalized_tasks = [_dict(item) for item in tasks]
             self._subscriptions = [_dict(item) for item in subscriptions]
@@ -432,12 +430,9 @@ class OverviewPage(QWidget):
             if episode:
                 title = f"{title} EP{episode}"
             size = _size_text(task.get("size", task.get("total_bytes")))
-            when = str(
-                task.get("completed_at")
-                or task.get("updated_at")
-                or task.get("eta")
-                or ""
-            )[:40]
+            when = str(task.get("completed_at") or task.get("updated_at") or task.get("eta") or "")[
+                :40
+            ]
             text = f"{title} {verb}"
             if size:
                 text = f"{text} · {size}"
@@ -456,9 +451,7 @@ class OverviewPage(QWidget):
             seen.setdefault(host, last_update)
         for host, last_update in seen.items():
             state = "wait" if last_update in {"尚未刷新", "", "—"} else "sub"
-            self.source_rows.addWidget(
-                _KvRow(host, f"上次更新 {last_update}", dot=state)
-            )
+            self.source_rows.addWidget(_KvRow(host, f"上次更新 {last_update}", dot=state))
         self.source_header.set_count(f"{len(seen)} 个" if seen else "")
         if not seen:
             empty = QLabel("添加订阅后会显示来源状态")

@@ -411,9 +411,7 @@ class MainWindow(QMainWindow):
 
     def _update_nav_badges(self) -> None:
         try:
-            subscriptions = (
-                controller_call(self.controller, "list_subscriptions", default=[]) or []
-            )
+            subscriptions = controller_call(self.controller, "list_subscriptions", default=[]) or []
             self.sidebar.set_badge(1, len(subscriptions) or None)
         except Exception:
             pass
