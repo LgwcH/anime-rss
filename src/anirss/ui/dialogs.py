@@ -473,6 +473,113 @@ class SubscriptionFolderDialog(QDialog):
         return result
 
 
+class AddMagnetDownloadDialog(QDialog):
+    """Queue a standalone download from a user-supplied magnet link."""
+
+    def __init__(self, default_directory: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._default_directory = default_directory
+        self.setWindowTitle("磁力链接下载")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(14)
+        title = QLabel(self.windowTitle())
+        title.setTextFormat(Qt.TextFormat.PlainText)
+        title.setObjectName("PageTitle")
+        title.setStyleSheet("font-size:14px;")
+        layout.addWidget(title)
+        detail = QLabel("粘贴磁力链接，直接交给内置下载器，无需关联任何订阅。")
+        detail.setTextFormat(Qt.TextFormat.PlainText)
+        detail.setWordWrap(True)
+        detail.setObjectName("PageSubtitle")
+        layout.addWidget(detail)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(12)
+        self.url_edit = QLineEdit()
+        self.url_edit.setMaxLength(4096)
+        self.url_edit.setPlaceholderText("magnet:?xt=urn:btih:…")
+        form.addRow("磁力链接 *", self.url_edit)
+
+        self.title_edit = QLineEdit()
+        self.title_edit.setMaxLength(200)
+        self.title_edit.setPlaceholderText("留空则使用链接中的显示名称")
+        form.addRow("标题", self.title_edit)
+
+        directory_row = QHBoxLayout()
+        directory_row.setSpacing(7)
+        self.directory_edit = QLineEdit()
+        self.directory_edit.setMaxLength(4096)
+        self.directory_edit.setPlaceholderText("留空则使用全局下载目录")
+        if default_directory:
+            self.directory_edit.setToolTip(f"留空时保存到：{default_directory}")
+        directory_row.addWidget(self.directory_edit)
+        browse = QPushButton("浏览")
+        browse.setIcon(icon("folder", "#717789", 17))
+        browse.clicked.connect(self._browse)
+        directory_row.addWidget(browse)
+        form.addRow("保存目录", directory_row)
+        layout.addLayout(form)
+
+        self.error_label = QLabel()
+        self.error_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.error_label.setWordWrap(True)
+        self.error_label.setStyleSheet("color:#D84A5B;")
+        self.error_label.hide()
+        layout.addWidget(self.error_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        confirm = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        confirm.setText("开始下载")
+        confirm.setProperty("primary", True)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self._validate_and_accept)
+        layout.addWidget(buttons)
+
+    def _browse(self) -> None:
+        start = self.directory_edit.text().strip() or self._default_directory or str(Path.home())
+        selected = QFileDialog.getExistingDirectory(self, "选择保存目录", start)
+        if selected:
+            self.directory_edit.setText(selected)
+
+    def _set_invalid(self, widget: QLineEdit, invalid: bool) -> None:
+        widget.setProperty("invalid", invalid)
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
+    def _validate_and_accept(self) -> None:
+        self.error_label.hide()
+        self._set_invalid(self.url_edit, False)
+        url = self.url_edit.text().strip()
+        if not url.lower().startswith("magnet:?"):
+            self._set_invalid(self.url_edit, True)
+            self.error_label.setText("请输入 magnet:? 开头的磁力链接。")
+            self.error_label.show()
+            self.url_edit.setFocus()
+            return
+        if "xt=" not in url.lower():
+            self._set_invalid(self.url_edit, True)
+            self.error_label.setText("磁力链接缺少 xt 参数，无法识别资源。")
+            self.error_label.show()
+            self.url_edit.setFocus()
+            return
+        self.accept()
+
+    def data(self) -> dict[str, Any]:
+        return {
+            "url": self.url_edit.text().strip(),
+            "title": self.title_edit.text().strip(),
+            "directory": self.directory_edit.text().strip(),
+        }
+
+
 class RemoveDownloadDialog(QMessageBox):
     """Confirmation box that optionally removes downloaded files as well."""
 

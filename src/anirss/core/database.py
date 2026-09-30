@@ -133,9 +133,9 @@ class SQLiteRepository:
 
                 CREATE TABLE IF NOT EXISTS download_tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    subscription_id INTEGER NOT NULL
+                    subscription_id INTEGER
                         REFERENCES subscriptions(id) ON DELETE CASCADE,
-                    feed_item_id INTEGER NOT NULL UNIQUE
+                    feed_item_id INTEGER UNIQUE
                         REFERENCES feed_items(id) ON DELETE CASCADE,
                     title TEXT NOT NULL,
                     source_url TEXT NOT NULL,
@@ -200,10 +200,58 @@ class SQLiteRepository:
             if "content_type" not in feed_columns:
                 connection.execute("ALTER TABLE feed_items ADD COLUMN content_type TEXT")
             task_columns = {
-                row["name"] for row in connection.execute("PRAGMA table_info(download_tasks)")
+                row["name"]: row for row in connection.execute("PRAGMA table_info(download_tasks)")
             }
             if "file_manifest" not in task_columns:
                 connection.execute("ALTER TABLE download_tasks ADD COLUMN file_manifest TEXT")
+            # Manually added downloads have no subscription/feed item, so both
+            # columns are nullable in new databases.  SQLite cannot relax a
+            # NOT NULL constraint in place; rebuild the table for older ones.
+            if task_columns["subscription_id"]["notnull"]:
+                connection.executescript(
+                    """
+                    CREATE TABLE download_tasks_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        subscription_id INTEGER
+                            REFERENCES subscriptions(id) ON DELETE CASCADE,
+                        feed_item_id INTEGER UNIQUE
+                            REFERENCES feed_items(id) ON DELETE CASCADE,
+                        title TEXT NOT NULL,
+                        source_url TEXT NOT NULL,
+                        destination_directory TEXT NOT NULL,
+                        filename TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        progress REAL NOT NULL DEFAULT 0,
+                        downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+                        total_bytes INTEGER,
+                        error TEXT,
+                        file_manifest TEXT,
+                        created_at TEXT NOT NULL,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT INTO download_tasks_new(
+                        id, subscription_id, feed_item_id, title, source_url,
+                        destination_directory, filename, kind, status, progress,
+                        downloaded_bytes, total_bytes, error, file_manifest,
+                        created_at, started_at, completed_at, updated_at
+                    )
+                    SELECT
+                        id, subscription_id, feed_item_id, title, source_url,
+                        destination_directory, filename, kind, status, progress,
+                        downloaded_bytes, total_bytes, error, file_manifest,
+                        created_at, started_at, completed_at, updated_at
+                    FROM download_tasks;
+                    DROP TABLE download_tasks;
+                    ALTER TABLE download_tasks_new RENAME TO download_tasks;
+                    CREATE INDEX IF NOT EXISTS idx_download_tasks_status
+                        ON download_tasks(status, created_at);
+                    CREATE INDEX IF NOT EXISTS idx_download_tasks_destination
+                        ON download_tasks(destination_directory);
+                    """
+                )
             row = connection.execute("SELECT 1 FROM app_settings WHERE id = 1").fetchone()
             if row is None:
                 connection.execute(
@@ -591,6 +639,8 @@ class SQLiteRepository:
                 task_id = int(lastrowid)
                 inserted = True
             except sqlite3.IntegrityError:
+                if task.feed_item_id is None:
+                    raise
                 row = connection.execute(
                     "SELECT id FROM download_tasks WHERE feed_item_id = ?",
                     (task.feed_item_id,),
@@ -617,6 +667,18 @@ class SQLiteRepository:
             row = connection.execute(
                 "SELECT * FROM download_tasks WHERE feed_item_id = ?",
                 (feed_item_id,),
+            ).fetchone()
+        return self._download_task_from_row(row) if row is not None else None
+
+    def find_manual_task_by_source_url(self, source_url: str) -> DownloadTask | None:
+        """Return the newest manual (subscription-less) task for a source URL."""
+
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM download_tasks "
+                "WHERE feed_item_id IS NULL AND source_url = ? "
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                (source_url,),
             ).fetchone()
         return self._download_task_from_row(row) if row is not None else None
 

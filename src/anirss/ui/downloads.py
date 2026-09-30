@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from .controller import controller_call
 from .data import as_mapping, human_bytes, progress_percent
-from .dialogs import RemoveDownloadDialog
+from .dialogs import AddMagnetDownloadDialog, RemoveDownloadDialog
 from .resources import icon
 from .theme import colors
 from .widgets import BadgeLabel, ElidedLabel, EmptyState, PageHeader
@@ -72,6 +72,11 @@ class DownloadsPage(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(9)
+        self.add_button = QPushButton("＋ 磁力下载")
+        self.add_button.setProperty("primary", True)
+        self.add_button.clicked.connect(self._add_manual_download)
+        toolbar.addWidget(self.add_button)
+        toolbar.addSpacing(6)
         toolbar.addWidget(QLabel("状态"))
         self.filter_combo = QComboBox()
         self.filter_combo.addItem("全部任务", None)
@@ -346,6 +351,27 @@ class DownloadsPage(QWidget):
 
     def _item(self, row: int) -> dict[str, Any] | None:
         return self._visible_items[row] if 0 <= row < len(self._visible_items) else None
+
+    def _add_manual_download(self) -> None:
+        settings = controller_call(self.controller, "load_settings", default={})
+        default_directory = str(_dict(settings).get("download_directory") or "")
+        dialog = AddMagnetDownloadDialog(default_directory=default_directory, parent=self)
+        if dialog.exec() != AddMagnetDownloadDialog.DialogCode.Accepted:
+            return
+        payload = dialog.data()
+        try:
+            controller_call(
+                self.controller,
+                "add_manual_download",
+                payload["url"],
+                title=payload["title"] or None,
+                directory=payload["directory"] or None,
+            )
+            self.message.emit("磁力链接已加入下载")
+            self.reload()
+            self.changed.emit()
+        except Exception as exc:
+            self.error.emit(f"添加下载失败：{exc}")
 
     def _pause(self, row: int) -> None:
         item = self._item(row)

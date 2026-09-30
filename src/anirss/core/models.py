@@ -127,12 +127,13 @@ class FeedItem:
 
 @dataclass(slots=True)
 class DownloadTask:
-    subscription_id: int
-    feed_item_id: int
     title: str
     source_url: str
     destination_directory: str
     filename: str
+    # None for manually added downloads that do not belong to a subscription.
+    subscription_id: int | None = None
+    feed_item_id: int | None = None
     kind: DownloadKind = DownloadKind.HTTP
     id: int | None = None
     status: DownloadStatus = DownloadStatus.QUEUED
