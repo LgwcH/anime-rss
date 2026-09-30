@@ -33,6 +33,7 @@ class AniRSSController(Protocol):
         self, subscription_id: Any, limit: int = 300
     ) -> list[Mapping[str, Any]]: ...
     def download_feed_item(self, subscription_id: Any, item_id: Any) -> Any: ...
+    def add_manual_download(self, url: Any, title: Any = None, directory: Any = None) -> Any: ...
     def list_downloads(self, status_filter: str | None = None) -> list[Mapping[str, Any]]: ...
     def pause_download(self, download_id: Any) -> Any: ...
     def resume_download(self, download_id: Any) -> Any: ...
@@ -530,6 +531,44 @@ class DemoController(QObject):
         self.downloads_changed.emit()
         self.data_changed.emit()
         self.notification.emit("已加入下载", str(task["title"]))
+        return deepcopy(task)
+
+    def add_manual_download(
+        self, url: Any, title: Any = None, directory: Any = None
+    ) -> dict[str, Any]:
+        url = str(url or "").strip()
+        if not url.lower().startswith("magnet:?"):
+            raise ValueError("仅支持 magnet:? 开头的磁力链接")
+        existing = next(
+            (
+                task
+                for task in self._downloads
+                if task.get("kind") == "magnet" and task.get("source_url") == url
+            ),
+            None,
+        )
+        if existing is not None:
+            return deepcopy(existing)
+        resolved_title = str(title or "").strip() or url
+        task = {
+            "id": f"manual-{len(self._downloads) + 1}",
+            "title": resolved_title,
+            "anime": "手动下载",
+            "episode": "",
+            "status": "queued",
+            "progress": 0,
+            "speed": "—",
+            "size": None,
+            "eta": "等待中",
+            "path": str(directory or "").strip() or str(self._settings["download_directory"]),
+            "kind": "magnet",
+            "source_url": url,
+            "error": None,
+        }
+        self._downloads.append(task)
+        self.downloads_changed.emit()
+        self.data_changed.emit()
+        self.notification.emit("已加入下载", resolved_title)
         return deepcopy(task)
 
     def list_downloads(self, status_filter: str | None = None) -> list[dict[str, Any]]:

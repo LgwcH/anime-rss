@@ -381,6 +381,145 @@ class DatabaseTests(unittest.TestCase):
             [],
         )
 
+    def test_manual_task_without_subscription_roundtrip(self) -> None:
+        task = DownloadTask(
+            subscription_id=None,
+            feed_item_id=None,
+            title="Manual magnet",
+            source_url="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+            destination_directory=self.temporary.name,
+            filename="Manual magnet",
+            kind=DownloadKind.MAGNET,
+        )
+        stored, inserted = self.repository.add_download_task(task)
+        self.assertTrue(inserted)
+        self.assertIsNone(stored.subscription_id)
+        self.assertIsNone(stored.feed_item_id)
+
+        found = self.repository.find_manual_task_by_source_url(task.source_url)
+        self.assertEqual(found, stored)
+        # Subscription tasks with the same URL are not matched.
+        subscription_task = self._new_task()
+        assert subscription_task.id is not None
+        self.assertIsNone(
+            self.repository.find_manual_task_by_source_url(subscription_task.source_url)
+        )
+
+    def test_notnull_task_columns_are_migrated_nullable(self) -> None:
+        database_path = Path(self.temporary.name) / "legacy-tasks.db"
+        connection = sqlite3.connect(database_path)
+        connection.executescript(
+            """
+            CREATE TABLE subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                feed_url TEXT NOT NULL UNIQUE,
+                directory_name TEXT,
+                save_directory TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                download_enabled INTEGER NOT NULL DEFAULT 1,
+                download_existing INTEGER NOT NULL DEFAULT 0,
+                poll_interval_minutes INTEGER,
+                include_pattern TEXT,
+                exclude_pattern TEXT,
+                episode_pattern TEXT,
+                last_checked_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE feed_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_id INTEGER NOT NULL
+                    REFERENCES subscriptions(id) ON DELETE CASCADE,
+                guid TEXT NOT NULL,
+                title TEXT NOT NULL,
+                download_url TEXT,
+                content_type TEXT,
+                link TEXT,
+                description TEXT,
+                published_at TEXT,
+                episode TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(subscription_id, guid),
+                UNIQUE(subscription_id, download_url)
+            );
+            CREATE TABLE download_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_id INTEGER NOT NULL
+                    REFERENCES subscriptions(id) ON DELETE CASCADE,
+                feed_item_id INTEGER NOT NULL UNIQUE
+                    REFERENCES feed_items(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                destination_directory TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                progress REAL NOT NULL DEFAULT 0,
+                downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+                total_bytes INTEGER,
+                error TEXT,
+                file_manifest TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO subscriptions(
+                name, feed_url, enabled, download_enabled, download_existing,
+                created_at, updated_at
+            ) VALUES ('Legacy', 'https://example.test/legacy', 1, 1, 0,
+                '2026-01-01T00:00:00', '2026-01-01T00:00:00');
+            INSERT INTO feed_items(
+                subscription_id, guid, title, download_url, created_at
+            ) VALUES (1, 'legacy-item', 'Legacy item', 'https://example.test/a.mkv',
+                '2026-01-01T00:00:00');
+            INSERT INTO download_tasks(
+                subscription_id, feed_item_id, title, source_url,
+                destination_directory, filename, kind, status,
+                created_at, updated_at
+            ) VALUES (1, 1, 'Legacy item', 'https://example.test/a.mkv',
+                '/tmp/legacy', 'a.mkv', 'http', 'completed',
+                '2026-01-01T00:00:00', '2026-01-01T00:00:00');
+            PRAGMA user_version = 2;
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        migrated = SQLiteRepository(database_path)
+        tasks = migrated.list_download_tasks()
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].title, "Legacy item")
+        manual, inserted = migrated.add_download_task(
+            DownloadTask(
+                subscription_id=None,
+                feed_item_id=None,
+                title="Manual",
+                source_url="magnet:?xt=urn:btih:abcdef",
+                destination_directory=self.temporary.name,
+                filename="Manual",
+                kind=DownloadKind.MAGNET,
+            )
+        )
+        self.assertTrue(inserted)
+        migrated.close()
+
+        connection = sqlite3.connect(database_path)
+        notnull = {
+            row[1]: row[3] for row in connection.execute("PRAGMA table_info(download_tasks)")
+        }
+        indexes = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+        }
+        connection.close()
+        self.assertEqual(notnull["subscription_id"], 0)
+        self.assertEqual(notnull["feed_item_id"], 0)
+        self.assertIn("idx_download_tasks_status", indexes)
+        self.assertIn("idx_download_tasks_destination", indexes)
+        assert manual.id is not None
+
 
 if __name__ == "__main__":
     unittest.main()

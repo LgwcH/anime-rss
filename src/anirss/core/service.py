@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, TimeoutError
 from contextlib import suppress
@@ -660,6 +661,103 @@ class AniRSSService:
                 if self._running:
                     self._submit_task_locked(task)
             return task
+
+    def add_manual_download(
+        self,
+        url: str,
+        *,
+        title: str | None = None,
+        directory: str | None = None,
+    ) -> DownloadTask:
+        """Queue a standalone download for a user-supplied magnet link.
+
+        Manual tasks are not bound to any subscription or feed item.  They
+        share filename reservation, task de-duplication and the pause/resume/
+        cancel machinery used by subscription downloads.
+        """
+
+        url = url.strip()
+        if not url.lower().startswith("magnet:?"):
+            raise ValueError("仅支持 magnet:? 开头的磁力链接")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        if not query.get("xt"):
+            raise ValueError("磁力链接缺少 xt 参数")
+        if self._shutdown_event.is_set():
+            raise ServiceStopping("service is stopping")
+
+        existing = self.repository.find_manual_task_by_source_url(url)
+        if existing is not None:
+            return self._reuse_existing_task(existing)
+
+        settings = self.get_settings()
+        resolved_title = (title or "").strip() or self._title_from_magnet_query(query)
+        destination = Path((directory or "").strip() or settings.download_root)
+        destination = destination.expanduser().resolve()
+        destination.mkdir(parents=True, exist_ok=True)
+        with self._filename_lock:
+            # Re-check under the filename lock in case the same link was
+            # queued concurrently.
+            existing = self.repository.find_manual_task_by_source_url(url)
+            if existing is None:
+                filename = self._unique_task_filename(
+                    destination,
+                    sanitize_component(resolved_title, fallback="download", max_length=220),
+                )
+                task, inserted = self.repository.add_download_task(
+                    DownloadTask(
+                        subscription_id=None,
+                        feed_item_id=None,
+                        title=resolved_title,
+                        source_url=url,
+                        destination_directory=str(destination),
+                        filename=filename,
+                        kind=classify_download(url),
+                    )
+                )
+            else:
+                task, inserted = existing, False
+
+        if not inserted:
+            return self._reuse_existing_task(task)
+
+        self._emit(
+            ServiceEvent(
+                ServiceEventType.TASK_ADDED,
+                f"Manually queued {task.title}",
+                subscription_id=None,
+                task_id=task.id,
+                payload={"manual": True},
+            )
+        )
+        with self._state_lock:
+            if self._running:
+                self._submit_task_locked(task)
+        return task
+
+    def _reuse_existing_task(self, existing: DownloadTask) -> DownloadTask:
+        if existing.status in {
+            DownloadStatus.PAUSED,
+            DownloadStatus.FAILED,
+            DownloadStatus.CANCELLED,
+        }:
+            assert existing.id is not None
+            return self.resume_task(existing.id)
+        if existing.status == DownloadStatus.QUEUED:
+            with self._state_lock:
+                if self._running:
+                    self._submit_task_locked(existing)
+        return existing
+
+    @staticmethod
+    def _title_from_magnet_query(query: Mapping[str, list[str]]) -> str:
+        display_name = query.get("dn", [""])[0].strip()
+        if display_name:
+            return display_name
+        xt = query.get("xt", [""])[0]
+        match = re.search(r"urn:btih:([0-9a-zA-Z]+)", xt)
+        if match:
+            return f"magnet-{match.group(1)[:12]}"
+        return "magnet-download"
 
     def get_task(self, task_id: int) -> DownloadTask | None:
         return self.repository.get_download_task(task_id)

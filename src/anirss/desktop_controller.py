@@ -334,13 +334,42 @@ class DesktopController(QObject):
                 self._operation_condition.notify_all()
 
     # Downloads -------------------------------------------------------
+    def add_manual_download(
+        self, url: Any, title: Any = None, directory: Any = None
+    ) -> dict[str, Any]:
+        with self._operation_condition:
+            if self._closing:
+                raise RuntimeError("AniRSS is closing")
+            self._active_operations += 1
+        try:
+            title_text = str(title).strip() if title is not None else ""
+            directory_text = str(directory).strip() if directory is not None else ""
+            task = self.service.add_manual_download(
+                str(url),
+                title=title_text or None,
+                directory=directory_text or None,
+            )
+            return self._task_mapping(task)
+        finally:
+            with self._operation_condition:
+                self._active_operations -= 1
+                self._operation_condition.notify_all()
+
     def list_downloads(self, status_filter: str | None = None) -> list[dict[str, Any]]:
         statuses = [status_filter] if status_filter else None
         return [self._task_mapping(task) for task in self.service.list_tasks(statuses)]
 
     def _task_mapping(self, task: DownloadTask) -> dict[str, Any]:
-        subscription = self.service.repository.get_subscription(task.subscription_id)
-        item = self.service.repository.get_feed_item(task.feed_item_id)
+        subscription = (
+            self.service.repository.get_subscription(task.subscription_id)
+            if task.subscription_id is not None
+            else None
+        )
+        item = (
+            self.service.repository.get_feed_item(task.feed_item_id)
+            if task.feed_item_id is not None
+            else None
+        )
         with self._speed_lock:
             speed = self._speed_samples.get(task.id or -1, (0.0, 0, 0.0))[2]
         eta = "—"
@@ -369,7 +398,7 @@ class DesktopController(QObject):
         return {
             "id": task.id,
             "title": task.title,
-            "anime": subscription.name if subscription else "",
+            "anime": subscription.name if subscription else "手动下载",
             "episode": item.episode if item else None,
             "status": task.status.value,
             "progress": task.progress,

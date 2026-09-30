@@ -968,6 +968,63 @@ class ServiceTests(unittest.TestCase):
         self.service.save_settings({"default_poll_interval_minutes": 45})
         self.assertIs(self.service._executor, second)
 
+    def test_add_manual_download_parses_magnet_title_and_dedupes(self) -> None:
+        url = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=My%20Show%20-%2001"
+        task = self.service.add_manual_download(url)
+        self.assertIsNone(task.subscription_id)
+        self.assertIsNone(task.feed_item_id)
+        self.assertEqual(task.kind, DownloadKind.MAGNET)
+        self.assertEqual(task.title, "My Show - 01")
+        self.assertEqual(task.status, DownloadStatus.QUEUED)
+        self.assertTrue(Path(task.destination_directory).is_dir())
+
+        duplicate = self.service.add_manual_download(url)
+        self.assertEqual(duplicate.id, task.id)
+        self.assertEqual(len(self.service.list_tasks()), 1)
+
+    def test_add_manual_download_title_fallback_and_overrides(self) -> None:
+        no_name = self.service.add_manual_download(
+            "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+        )
+        self.assertEqual(no_name.title, "magnet-0123456789ab")
+
+        titled = self.service.add_manual_download(
+            "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&dn=Ignored",
+            title=" 自定义标题 ",
+        )
+        self.assertEqual(titled.title, "自定义标题")
+
+        directory = Path(self.temporary.name) / "manual-target"
+        placed = self.service.add_manual_download(
+            "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            directory=str(directory),
+        )
+        self.assertEqual(placed.destination_directory, str(directory.expanduser().resolve()))
+
+    def test_add_manual_download_rejects_invalid_links(self) -> None:
+        with self.assertRaises(ValueError):
+            self.service.add_manual_download("https://example.test/file.torrent")
+        with self.assertRaises(ValueError):
+            self.service.add_manual_download("magnet:?dn=no-xt")
+        self.assertEqual(self.service.list_tasks(), [])
+
+    def test_add_manual_download_resumes_failed_duplicate(self) -> None:
+        url = "magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc"
+        task = self.service.add_manual_download(url)
+        assert task.id is not None
+        failed = self.service.repository.update_download_task_fields(
+            task.id,
+            DownloadStatus.QUEUED,
+            status=DownloadStatus.FAILED,
+            error="boom",
+        )
+        self.assertEqual(failed.status, DownloadStatus.FAILED)
+
+        retried = self.service.add_manual_download(url)
+        self.assertEqual(retried.id, task.id)
+        self.assertEqual(retried.status, DownloadStatus.QUEUED)
+        self.assertIsNone(retried.error)
+
 
 if __name__ == "__main__":
     unittest.main()
