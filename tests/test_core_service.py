@@ -1025,6 +1025,67 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(retried.status, DownloadStatus.QUEUED)
         self.assertIsNone(retried.error)
 
+    def test_refresh_all_refreshes_feeds_concurrently(self) -> None:
+        barrier = threading.Barrier(2, timeout=5)
+
+        def fetch(_url: str, _settings: AppSettings) -> bytes:
+            # Serial refreshes would deadlock here and time the barrier out.
+            barrier.wait()
+            return RSS
+
+        self.service._feed_fetcher = fetch
+        first = self.service.save_subscription(
+            {
+                "name": "Parallel one",
+                "feed_url": "https://example.test/parallel-one",
+                "download_existing": True,
+            }
+        )
+        second = self.service.save_subscription(
+            {
+                "name": "Parallel two",
+                "feed_url": "https://example.test/parallel-two",
+                "download_existing": True,
+            }
+        )
+        assert first.id is not None and second.id is not None
+
+        created = self.service.refresh_all()
+
+        self.assertEqual(len(created), 4)
+        self.assertEqual(
+            {task.subscription_id for task in created},
+            {first.id, second.id},
+        )
+
+    def test_refresh_queries_task_filenames_once_per_directory(self) -> None:
+        subscription = self.service.save_subscription(
+            {
+                "name": "Filename cache",
+                "feed_url": "https://example.test/filename-cache",
+                "download_existing": True,
+            }
+        )
+        assert subscription.id is not None
+        original = self.service.repository.list_download_task_filenames
+        calls: list[str] = []
+
+        def tracking(directory: str) -> list[str]:
+            calls.append(directory)
+            return original(directory)
+
+        with patch.object(
+            self.service.repository,
+            "list_download_task_filenames",
+            side_effect=tracking,
+        ):
+            created = self.service.refresh_subscription(subscription.id)
+
+        self.assertEqual(len(created), 2)
+        # Two new tasks in the same directory must share one filename query
+        # instead of one query per item with an ever-growing result set.
+        self.assertEqual(len(calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -104,6 +104,8 @@ class SubscriptionDetailView(QWidget):
         self._theme = "light"
         self._subscription: dict[str, Any] = {}
         self._items: list[dict[str, Any]] = []
+        # feed item id -> (raw description, plain text); pruned in set_items.
+        self._description_cache: dict[Any, tuple[str, str]] = {}
         self._connected_signals: list[Any] = []
         self._download_workers: dict[tuple[Any, Any], FunctionWorker] = {}
         self._refreshing_subscription_id: Any = None
@@ -469,92 +471,76 @@ class SubscriptionDetailView(QWidget):
         *,
         selected_id: Any = None,
         scroll_value: int = 0,
+        force_rebuild: bool = False,
     ) -> None:
         details_scroll_value = self.details_scroll.verticalScrollBar().value()
-        self._items = []
+        new_items: list[dict[str, Any]] = []
+        current_ids: set[Any] = set()
         for source in items:
             item = as_mapping(source)
             title = str(item.get("title") or "未命名条目")[:2000]
             episode = str(item.get("episode") or "—")[:100]
-            description = _plain_description(item.get("description"))
+            description = self._cached_plain_description(item.get("id"), item.get("description"))
             item["_display_title"] = title
             item["_display_episode"] = episode
             item["_plain_description"] = description
             item["_search_blob"] = f"{title} {episode} {description}".casefold()
-            self._items.append(item)
-        self.table.setRowCount(0)
-        c = colors(self._theme)
-        selected_row = -1
-        for item in self._items:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            item_id = item.get("id")
-            episode = str(item["_display_episode"])
-            episode_item = QTableWidgetItem(episode)
-            episode_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            episode_item.setData(Qt.ItemDataRole.UserRole, item_id)
-            self.table.setItem(row, 0, episode_item)
+            new_items.append(item)
+            if item.get("id") is not None:
+                current_ids.add(item.get("id"))
+        # Drop cache entries for items that disappeared so it cannot leak.
+        for cached_id in list(self._description_cache):
+            if cached_id not in current_ids:
+                del self._description_cache[cached_id]
 
-            title = str(item["_display_title"])
-            title_item = QTableWidgetItem(title)
-            description = str(item["_plain_description"])
-            detail_tooltip = title if not description else f"{title}\n\n{description}"
-            title_item.setToolTip(html.escape(detail_tooltip))
-            self.table.setItem(row, 1, title_item)
-            published = str(item.get("published_at") or "—")[:500]
-            published_item = QTableWidgetItem(published)
-            published_item.setToolTip(html.escape(published))
-            self.table.setItem(row, 2, published_item)
-            kind_item = QTableWidgetItem(_kind_text(item.get("download_kind")))
-            kind_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row, 3, kind_item)
+        previous_items = self._items
+        self._items = new_items
+        if not force_rebuild and self._rows_match_items(previous_items):
+            # Same rows, only task state (or pending-worker state) may have
+            # changed: refresh the affected status/action cells in place.
+            self._refresh_changed_rows(previous_items)
+            self._apply_filter()
+            return
 
-            status, tone, action_text, action_kind = self._presentation(item)
-            badge = BadgeLabel(status, tone)
-            badge.set_theme(self._theme)
-            if not bool(item.get("matches_rules", True)):
-                badge.setToolTip("该条目未匹配自动下载规则，仍可手动下载。")
-            status_cell = QWidget()
-            status_layout = QHBoxLayout(status_cell)
-            status_layout.setContentsMargins(4, 0, 4, 0)
-            status_layout.addWidget(badge)
-            self.table.setCellWidget(row, 4, status_cell)
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(0)
+            selected_row = -1
+            for item in self._items:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                item_id = item.get("id")
+                episode = str(item["_display_episode"])
+                episode_item = QTableWidgetItem(episode)
+                episode_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                episode_item.setData(Qt.ItemDataRole.UserRole, item_id)
+                self.table.setItem(row, 0, episode_item)
 
-            action = QPushButton(action_text)
-            action.setMinimumWidth(100)
-            pending_key = (self.subscription_id, item_id)
-            if pending_key in self._download_workers:
-                action.setText("处理中…")
-                action.setEnabled(False)
-            elif action_kind == "download":
-                action.setProperty("primary", True)
-                action.setIcon(icon("download", "#FFFFFF", 16))
-                action.clicked.connect(
-                    lambda _checked=False, current=item: self._download_item(current)
-                )
-            elif action_kind == "show":
-                action.setIcon(icon("arrow", c.text_muted, 15))
-                action.clicked.connect(
-                    lambda _checked=False, current=item: self._show_download(current)
-                )
-            else:
-                action.setEnabled(False)
-                action.setToolTip("RSS 条目没有 enclosure、种子或磁力链接。")
-                action.setIcon(icon("download", c.text_muted, 16))
-            action.setProperty("expandedText", action.text())
-            action.setProperty("expandedToolTip", action.toolTip())
-            action_cell = QWidget()
-            action_layout = QHBoxLayout(action_cell)
-            action_layout.setContentsMargins(4, 0, 4, 0)
-            action_layout.addWidget(action)
-            self.table.setCellWidget(row, 5, action_cell)
-            if selected_id is not None and item_id == selected_id:
-                selected_row = row
+                title = str(item["_display_title"])
+                title_item = QTableWidgetItem(title)
+                description = str(item["_plain_description"])
+                detail_tooltip = title if not description else f"{title}\n\n{description}"
+                title_item.setToolTip(html.escape(detail_tooltip))
+                self.table.setItem(row, 1, title_item)
+                published = str(item.get("published_at") or "—")[:500]
+                published_item = QTableWidgetItem(published)
+                published_item.setToolTip(html.escape(published))
+                self.table.setItem(row, 2, published_item)
+                kind_item = QTableWidgetItem(_kind_text(item.get("download_kind")))
+                kind_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(row, 3, kind_item)
 
-        self.content_stack.setCurrentIndex(0 if self._items else 1)
-        self.empty.set_theme(self._theme)
-        self._update_table_columns(self.width())
-        self._apply_filter()
+                self.table.setCellWidget(row, 4, self._build_status_cell(item))
+                self.table.setCellWidget(row, 5, self._build_action_cell(item))
+                if selected_id is not None and item_id == selected_id:
+                    selected_row = row
+
+            self.content_stack.setCurrentIndex(0 if self._items else 1)
+            self.empty.set_theme(self._theme)
+            self._update_table_columns(self.width())
+            self._apply_filter()
+        finally:
+            self.table.setUpdatesEnabled(True)
         if self._items:
             if selected_row < 0 or self.table.isRowHidden(selected_row):
                 selected_row = self._first_visible_row()
@@ -570,6 +556,104 @@ class SubscriptionDetailView(QWidget):
             )
         else:
             self._show_item_details(-1)
+
+    def _cached_plain_description(self, item_id: Any, raw: Any) -> str:
+        source = str(raw or "")[:20000]
+        if item_id is None:
+            return _plain_description(source)
+        cached = self._description_cache.get(item_id)
+        if cached is not None and cached[0] == source:
+            return cached[1]
+        plain = _plain_description(source)
+        self._description_cache[item_id] = (source, plain)
+        return plain
+
+    @staticmethod
+    def _item_static_signature(item: Mapping[str, Any]) -> tuple[Any, ...]:
+        """Fields rendered as plain cells; task state is refreshed in place."""
+
+        return (
+            item.get("id"),
+            str(item.get("_display_title") or ""),
+            str(item.get("_display_episode") or ""),
+            str(item.get("published_at") or "")[:500],
+            str(item.get("download_kind") or ""),
+            bool(item.get("matches_rules", True)),
+            str(item.get("link") or ""),
+            str(item.get("download_url") or ""),
+            str(item.get("_plain_description") or ""),
+        )
+
+    def _rows_match_items(self, previous_items: list[dict[str, Any]]) -> bool:
+        if (
+            not self._items
+            or len(previous_items) != len(self._items)
+            or self.table.rowCount() != len(self._items)
+        ):
+            return False
+        return all(
+            self._item_static_signature(old) == self._item_static_signature(new)
+            for old, new in zip(previous_items, self._items, strict=True)
+        )
+
+    def _row_task_state(self, item: Mapping[str, Any]) -> tuple[Any, ...]:
+        return (
+            item.get("task_id"),
+            item.get("task_status"),
+            item.get("task_error"),
+            (self.subscription_id, item.get("id")) in self._download_workers,
+        )
+
+    def _refresh_changed_rows(self, previous_items: list[dict[str, Any]]) -> None:
+        for row, (old, item) in enumerate(zip(previous_items, self._items, strict=True)):
+            if self._row_task_state(old) == self._row_task_state(item):
+                continue
+            self.table.setCellWidget(row, 4, self._build_status_cell(item))
+            self.table.setCellWidget(row, 5, self._build_action_cell(item))
+
+    def _build_status_cell(self, item: Mapping[str, Any]) -> QWidget:
+        status, tone, _action_text, _action_kind = self._presentation(item)
+        badge = BadgeLabel(status, tone)
+        badge.set_theme(self._theme)
+        if not bool(item.get("matches_rules", True)):
+            badge.setToolTip("该条目未匹配自动下载规则，仍可手动下载。")
+        status_cell = QWidget()
+        status_layout = QHBoxLayout(status_cell)
+        status_layout.setContentsMargins(4, 0, 4, 0)
+        status_layout.addWidget(badge)
+        return status_cell
+
+    def _build_action_cell(self, item: Mapping[str, Any]) -> QWidget:
+        c = colors(self._theme)
+        _status, _tone, action_text, action_kind = self._presentation(item)
+        action = QPushButton(action_text)
+        action.setMinimumWidth(100)
+        pending_key = (self.subscription_id, item.get("id"))
+        if pending_key in self._download_workers:
+            action.setText("处理中…")
+            action.setEnabled(False)
+        elif action_kind == "download":
+            action.setProperty("primary", True)
+            action.setIcon(icon("download", "#FFFFFF", 16))
+            action.clicked.connect(
+                lambda _checked=False, current=item: self._download_item(current)
+            )
+        elif action_kind == "show":
+            action.setIcon(icon("arrow", c.text_muted, 15))
+            action.clicked.connect(
+                lambda _checked=False, current=item: self._show_download(current)
+            )
+        else:
+            action.setEnabled(False)
+            action.setToolTip("RSS 条目没有 enclosure、种子或磁力链接。")
+            action.setIcon(icon("download", c.text_muted, 16))
+        action.setProperty("expandedText", action.text())
+        action.setProperty("expandedToolTip", action.toolTip())
+        action_cell = QWidget()
+        action_layout = QHBoxLayout(action_cell)
+        action_layout.setContentsMargins(4, 0, 4, 0)
+        action_layout.addWidget(action)
+        return action_cell
 
     @staticmethod
     def _presentation(item: Mapping[str, Any]) -> tuple[str, str, str, str]:
@@ -760,9 +844,20 @@ class SubscriptionDetailView(QWidget):
         worker.signals.failed.connect(
             lambda detail, current=key: self._download_failed(current, detail)
         )
-        self._rerender_preserving_position()
+        # Only the clicked row's pending state changed; refresh it in place.
+        # A full set_items() pass cannot see the change: pending state is live
+        # worker state, so the old/new comparison would skip the row.
+        self._refresh_item_row(item_id)
         self.message.emit("正在加入下载队列…")
         QThreadPool.globalInstance().start(worker)
+
+    def _refresh_item_row(self, item_id: Any) -> None:
+        for row, existing in enumerate(self._items):
+            if existing.get("id") != item_id:
+                continue
+            self.table.setCellWidget(row, 4, self._build_status_cell(existing))
+            self.table.setCellWidget(row, 5, self._build_action_cell(existing))
+            break
 
     def _download_finished(self, key: tuple[Any, Any]) -> None:
         self._download_workers.pop(key, None)
@@ -772,19 +867,8 @@ class SubscriptionDetailView(QWidget):
 
     def _download_failed(self, key: tuple[Any, Any], detail: str) -> None:
         self._download_workers.pop(key, None)
-        self._rerender_preserving_position()
+        self._refresh_item_row(key[1])
         self.error.emit(f"无法加入下载：{detail}")
-
-    def _rerender_preserving_position(self) -> None:
-        if not self._items:
-            return
-        selected_id = self._selected_item_id()
-        scroll_value = self.table.verticalScrollBar().value()
-        self.set_items(
-            self._items,
-            selected_id=selected_id,
-            scroll_value=scroll_value,
-        )
 
     def _show_download(self, item: Mapping[str, Any]) -> None:
         task_id = item.get("task_id")

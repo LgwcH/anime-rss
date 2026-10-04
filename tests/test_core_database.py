@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from anirss.core.database import SQLiteRepository
 from anirss.core.models import (
@@ -380,6 +381,125 @@ class DatabaseTests(unittest.TestCase):
             ),
             [],
         )
+
+    def test_add_feed_items_batch_inserts_and_dedupes_in_one_transaction(self) -> None:
+        assert self.subscription.id is not None
+        subscription_id = self.subscription.id
+        existing, was_inserted = self.repository.add_feed_item(
+            FeedItem(
+                subscription_id=subscription_id,
+                guid="batch-existing",
+                title="Existing",
+                download_url="https://example.test/existing.mkv",
+            )
+        )
+        self.assertTrue(was_inserted)
+        new_item = FeedItem(
+            subscription_id=subscription_id,
+            guid="batch-new",
+            title="New",
+            download_url="https://example.test/new.mkv",
+        )
+        template = DownloadTask(
+            title=new_item.title,
+            source_url=new_item.download_url or "",
+            destination_directory=self.temporary.name,
+            filename="new.mkv",
+        )
+        same_batch_duplicate = replace(new_item, title="New (renamed in feed)")
+        # Pre-existing entries keep their row and ignore the task template.
+        stale_template = replace(template, filename="stale.mkv")
+
+        results = self.repository.add_feed_items_batch(
+            [
+                (new_item, template),
+                (same_batch_duplicate, replace(template, filename="dupe.mkv")),
+                (replace(new_item, guid="batch-existing", title="Existing"), stale_template),
+                (
+                    new_item.__class__(
+                        subscription_id=subscription_id, guid="batch-plain", title="Plain"
+                    ),
+                    None,
+                ),
+            ]
+        )
+
+        self.assertEqual([was_new for _item, _task, was_new in results], [True, False, False, True])
+        stored_new, stored_task, _ = results[0]
+        assert stored_new.id is not None and stored_task is not None
+        self.assertEqual(stored_task.feed_item_id, stored_new.id)
+        self.assertEqual(stored_task.filename, "new.mkv")
+        duplicate_item, duplicate_task, _ = results[1]
+        self.assertEqual(duplicate_item.id, stored_new.id)
+        self.assertEqual(duplicate_task, stored_task)
+        existing_item, existing_task, _ = results[2]
+        assert existing.id is not None
+        self.assertEqual(existing_item.id, existing.id)
+        self.assertIsNone(existing_task)
+        plain_item, plain_task, _ = results[3]
+        self.assertIsNotNone(plain_item.id)
+        self.assertIsNone(plain_task)
+
+        self.assertEqual(len(self.repository.list_feed_items(subscription_id)), 3)
+        self.assertEqual(len(self.repository.list_download_tasks()), 1)
+        # A second batch over the same feed is a complete no-op.
+        repeat = self.repository.add_feed_items_batch([(new_item, template)])
+        self.assertEqual([(was_new) for _i, _t, was_new in repeat], [False])
+        self.assertEqual(len(self.repository.list_download_tasks()), 1)
+
+    def test_add_feed_items_batch_rolls_back_everything_on_task_failure(self) -> None:
+        assert self.subscription.id is not None
+        subscription_id = self.subscription.id
+        item = FeedItem(
+            subscription_id=subscription_id,
+            guid="batch-rollback",
+            title="Rollback",
+            download_url="https://example.test/rollback.mkv",
+        )
+        template = DownloadTask(
+            title=item.title,
+            source_url=item.download_url or "",
+            destination_directory=self.temporary.name,
+            filename="rollback.mkv",
+        )
+        original_task_values = self.repository._task_values
+        with (
+            patch.object(
+                self.repository,
+                "_task_values",
+                side_effect=OSError("temporary database failure"),
+            ),
+            self.assertRaises(OSError),
+        ):
+            self.repository.add_feed_items_batch([(item, template)])
+        self.assertEqual(self.repository.list_feed_items(subscription_id), [])
+        self.assertEqual(self.repository.list_download_tasks(), [])
+
+        with patch.object(
+            self.repository,
+            "_task_values",
+            wraps=original_task_values,
+        ):
+            results = self.repository.add_feed_items_batch([(item, template)])
+        self.assertTrue(results[0][2])
+        self.assertEqual(len(self.repository.list_download_tasks()), 1)
+
+    def test_add_feed_items_batch_rejects_task_template_without_url(self) -> None:
+        assert self.subscription.id is not None
+        item = FeedItem(
+            subscription_id=self.subscription.id,
+            guid="batch-no-url",
+            title="No URL",
+        )
+        template = DownloadTask(
+            title=item.title,
+            source_url="",
+            destination_directory=self.temporary.name,
+            filename="no-url.mkv",
+        )
+        with self.assertRaises(ValueError):
+            self.repository.add_feed_items_batch([(item, template)])
+        self.assertEqual(self.repository.add_feed_items_batch([]), [])
 
     def test_manual_task_without_subscription_roundtrip(self) -> None:
         task = DownloadTask(
