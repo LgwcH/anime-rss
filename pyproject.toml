@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anirss"
-version = "0.2.1"
+version = "0.2.2"
 description = "A privacy-friendly Windows RSS subscription and download manager for episodic media."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -84,6 +84,7 @@ include = [
   "/RELEASE_NOTES-0.1.4.md",
   "/RELEASE_NOTES-0.1.5.md",
   "/RELEASE_NOTES-0.1.6.md",
+  "/RELEASE_NOTES-0.2.2.md",
   "/SECURITY.md",
   "/THIRD_PARTY_NOTICES.md",
   "/pyproject.toml",
