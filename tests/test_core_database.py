@@ -447,6 +447,89 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual([(was_new) for _i, _t, was_new in repeat], [False])
         self.assertEqual(len(self.repository.list_download_tasks()), 1)
 
+    def test_add_feed_items_batch_preserves_crossed_guid_url_ownership(self) -> None:
+        assert self.subscription.id is not None
+        entries = []
+        for guid, resource in [("x", "one"), ("y", "one"), ("y", "two")]:
+            item = FeedItem(
+                subscription_id=self.subscription.id,
+                guid=guid,
+                title=guid + resource,
+                download_url=f"https://example.test/{resource}.mkv",
+            )
+            template = DownloadTask(
+                title=item.title,
+                source_url=item.download_url or "",
+                destination_directory=self.temporary.name,
+                filename=item.title + ".mkv",
+            )
+            entries.append((item, template))
+
+        results = self.repository.add_feed_items_batch(entries)
+
+        self.assertEqual([is_new for _item, _task, is_new in results], [True, False, True])
+        self.assertEqual([item.guid for item, _task, _new in results], ["x", "x", "y"])
+        self.assertEqual(results[1][0].id, results[0][0].id)
+        self.assertEqual(results[1][1], results[0][1])
+        self.assertEqual(
+            {task.source_url for task in self.repository.list_download_tasks()},
+            {"https://example.test/one.mkv", "https://example.test/two.mkv"},
+        )
+        for item, task, _new in results:
+            assert task is not None
+            self.assertEqual(task.feed_item_id, item.id)
+            self.assertEqual(task.source_url, item.download_url)
+
+    def test_add_feed_items_batch_chooses_oldest_conflict_across_both_keys(self) -> None:
+        assert self.subscription.id is not None
+        first, _ = self.repository.add_feed_item(
+            FeedItem(
+                subscription_id=self.subscription.id,
+                guid="first",
+                title="First",
+                download_url="https://example.test/one.mkv",
+            )
+        )
+        second, _ = self.repository.add_feed_item(
+            FeedItem(
+                subscription_id=self.subscription.id,
+                guid="second",
+                title="Second",
+                download_url="https://example.test/two.mkv",
+            )
+        )
+
+        results = self.repository.add_feed_items_batch(
+            [(replace(second, download_url=first.download_url), None)]
+        )
+
+        self.assertEqual(results, [(first, None, False)])
+        self.assertEqual(len(self.repository.list_feed_items(self.subscription.id)), 2)
+
+    def test_add_feed_items_batch_does_not_queue_later_duplicate_of_baseline(self) -> None:
+        assert self.subscription.id is not None
+        first = FeedItem(
+            subscription_id=self.subscription.id,
+            guid="baseline",
+            title="Baseline",
+            download_url="https://example.test/one.mkv",
+        )
+        template = DownloadTask(
+            title="Duplicate",
+            source_url=first.download_url or "",
+            destination_directory=self.temporary.name,
+            filename="duplicate.mkv",
+        )
+
+        results = self.repository.add_feed_items_batch(
+            [(first, None), (replace(first, guid="alias"), template)]
+        )
+
+        self.assertEqual([is_new for _item, _task, is_new in results], [True, False])
+        self.assertEqual(results[0][0].id, results[1][0].id)
+        self.assertIsNone(results[1][1])
+        self.assertEqual(self.repository.list_download_tasks(), [])
+
     def test_add_feed_items_batch_rolls_back_everything_on_task_failure(self) -> None:
         assert self.subscription.id is not None
         subscription_id = self.subscription.id
