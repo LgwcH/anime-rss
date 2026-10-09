@@ -1,17 +1,16 @@
-AniRSS 0.1.5 快速开始
+AniRSS 0.2.2 快速开始
 =====================
 
-当前 0.1.5 先提供源码包与 Python wheel。Windows x86_64 便携包只有在取得可信 Authenticode
-签名并通过安全产品复核后才会发布；不要继续使用或恢复被 Defender 隔离的 0.1.4 EXE。
+当前版本提供 Windows x64 Alpha 预发布 ZIP、源码包与 Python wheel。ZIP 内置 BT 支持，
+无需另行安装 Python。EXE 尚未签名；请从本仓库 Releases 下载并核对 SHA-256 校验值。
 
 一、校验与解压
 --------------
 
-1. 若正式发布目录中提供了已签名 Windows ZIP，将 ZIP 与 SHA256SUMS.txt 放在同一目录；仅有
-   源码包/wheel 时请按发布说明从可信 Python 环境安装，不要自行寻找第三方重打包 EXE。
+1. 从本仓库 Releases 下载 AniRSS-0.2.2-windows-x64.zip 与 SHA256SUMS.txt，放在同一目录。
 2. 在 PowerShell 中计算 ZIP 的 SHA-256：
 
-   Get-FileHash .\AniRSS-0.1.5-windows-x86_64-with-bt.zip -Algorithm SHA256
+   Get-FileHash .\AniRSS-0.2.2-windows-x64.zip -Algorithm SHA256
 
 3. 将结果与 SHA256SUMS.txt 中同名文件的一行比较；不一致时不要运行该文件。
 4. 把 ZIP 完整解压到固定目录，例如 D:\Apps\AniRSS。
@@ -26,7 +25,7 @@ AniRSS.exe 会导致程序无法启动。不要直接在 ZIP 压缩包预览窗�
 2. 打开“设置”，选择默认下载目录，并按需设置并发下载数、RSS 轮询间隔、主题、系统托盘、
    桌面通知和当前用户级开机自启动。
 3. 设置中的代理只用于 RSS 和 HTTP 请求，不会代理 BT 的 Tracker、DHT、PEX 或节点连接。
-4. 点击“保存设置”。修改并发下载数后，重启 AniRSS 才能保证新并发数完整生效。
+4. 点击“保存设置”。修改并发下载数后立即生效。
 
 三、添加订阅
 ------------
@@ -73,11 +72,11 @@ Windows 默认应用数据目录：
 六、重要限制与合法使用
 ----------------------
 
-AniRSS 0.1.5 是 Alpha 版本，不提供 OPML 导入/导出、保存前订阅测试、独立人工确认
+AniRSS 0.2.2 是 Alpha 版本，不提供 OPML 导入/导出、保存前订阅测试、独立人工确认
 候选队列、HTTP 自动重试、BT 分享率停止、BT/SOCKS 代理、云同步或远程控制，也不会自动解压、
 安装或执行下载内容。
 
 AniRSS 只是通用 RSS 与下载工具，不提供内容源，也不绕过 DRM、付费墙或访问控制。只能订阅、
 下载和分享自己有权访问的内容，并应遵守内容许可、服务条款、网络政策和当地法律。
 
-更多变更和限制请阅读 RELEASE_NOTES-0.1.5.md。
+更多变更和限制请阅读 RELEASE_NOTES-0.2.2.md。
