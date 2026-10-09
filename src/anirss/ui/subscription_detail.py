@@ -496,8 +496,8 @@ class SubscriptionDetailView(QWidget):
         previous_items = self._items
         self._items = new_items
         if not force_rebuild and self._rows_match_items(previous_items):
-            # Same rows, only task state (or pending-worker state) may have
-            # changed: refresh the affected status/action cells in place.
+            # Same rows: refresh changed task state in place. Worker lifecycle
+            # callbacks update their affected row explicitly.
             self._refresh_changed_rows(previous_items)
             self._apply_filter()
             return
@@ -601,7 +601,6 @@ class SubscriptionDetailView(QWidget):
             item.get("task_id"),
             item.get("task_status"),
             item.get("task_error"),
-            (self.subscription_id, item.get("id")) in self._download_workers,
         )
 
     def _refresh_changed_rows(self, previous_items: list[dict[str, Any]]) -> None:
@@ -649,6 +648,7 @@ class SubscriptionDetailView(QWidget):
             action.setIcon(icon("download", c.text_muted, 16))
         action.setProperty("expandedText", action.text())
         action.setProperty("expandedToolTip", action.toolTip())
+        self._apply_action_layout(action, compact=self.width() < 680)
         action_cell = QWidget()
         action_layout = QHBoxLayout(action_cell)
         action_layout.setContentsMargins(4, 0, 4, 0)
@@ -861,6 +861,8 @@ class SubscriptionDetailView(QWidget):
 
     def _download_finished(self, key: tuple[Any, Any]) -> None:
         self._download_workers.pop(key, None)
+        if self.subscription_id == key[0]:
+            self._refresh_item_row(key[1])
         self._reload_timer.stop()
         self.message.emit("条目已加入或恢复下载")
         self.changed.emit()
@@ -989,25 +991,27 @@ class SubscriptionDetailView(QWidget):
         self.table.setColumnHidden(3, width < 650)
         compact_actions = width < 680
         self.table.setColumnWidth(5, 64 if compact_actions else 128)
-        c = colors(self._theme)
         for row in range(self.table.rowCount()):
             cell = self.table.cellWidget(row, 5)
             action = cell.findChild(QPushButton) if cell is not None else None
             if action is None:
                 continue
-            full_text = str(action.property("expandedText") or "")
-            full_tooltip = str(action.property("expandedToolTip") or "")
-            if compact_actions:
-                if action.icon().isNull():
-                    action.setIcon(icon("refresh", c.text_muted, 16))
-                action.setText("")
-                action.setToolTip(full_tooltip or full_text)
-                action.setFixedSize(26, 26)
-            else:
-                action.setMinimumSize(100, 0)
-                action.setMaximumSize(16777215, 16777215)
-                action.setText(full_text)
-                action.setToolTip(full_tooltip)
+            self._apply_action_layout(action, compact=compact_actions)
+
+    def _apply_action_layout(self, action: QPushButton, *, compact: bool) -> None:
+        full_text = str(action.property("expandedText") or "")
+        full_tooltip = str(action.property("expandedToolTip") or "")
+        if compact:
+            if action.icon().isNull():
+                action.setIcon(icon("refresh", colors(self._theme).text_muted, 16))
+            action.setText("")
+            action.setToolTip(full_tooltip or full_text)
+            action.setFixedSize(26, 26)
+        else:
+            action.setMinimumSize(100, 0)
+            action.setMaximumSize(16777215, 16777215)
+            action.setText(full_text)
+            action.setToolTip(full_tooltip)
 
     def _connect_controller_signals(self) -> None:
         for name in ("downloads_changed",):
@@ -1041,6 +1045,7 @@ class SubscriptionDetailView(QWidget):
                 self._items,
                 selected_id=selected_id,
                 scroll_value=scroll_value,
+                force_rebuild=True,
             )
 
 
