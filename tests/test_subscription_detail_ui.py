@@ -10,7 +10,10 @@ from PySide6.QtWidgets import QApplication, QPushButton
 
 from anirss.ui.controller import DemoController
 from anirss.ui.main_window import MainWindow
+from anirss.ui.subscription_detail import SubscriptionDetailView
 from anirss.ui.subscriptions import SubscriptionsPage
+from anirss.ui.widgets import BadgeLabel
+from anirss.ui.worker import FunctionWorker
 
 
 class _SlowDownloadController(DemoController):
@@ -136,6 +139,99 @@ class SubscriptionDetailUiTests(unittest.TestCase):
             self.qt_app.processEvents()
             page.close()
             page.deleteLater()
+
+    def _isolated_detail(self, width: int = 1100) -> SubscriptionDetailView:
+        detail = SubscriptionDetailView()
+        self.addCleanup(detail.deleteLater)
+        self.addCleanup(detail.close)
+        detail.resize(width, 720)
+        detail.set_subscription({"id": "test", "name": "Test"}, reload_items=False)
+        detail.set_items(
+            [{"id": "item", "title": "Episode", "download_url": "https://example.test/x.mkv"}]
+        )
+        return detail
+
+    def test_success_after_task_reload_restores_pending_action(self) -> None:
+        detail = self._isolated_detail()
+        key = ("test", "item")
+        detail._download_workers[key] = FunctionWorker(lambda: None)
+        queued = {**detail._items[0], "task_id": "task", "task_status": "queued"}
+        # A service update can reach the GUI before the worker's success signal.
+        detail.set_items([queued])
+        cell = detail.table.cellWidget(0, 5)
+        assert cell is not None
+        action = cell.findChild(QPushButton)
+        assert action is not None
+        self.assertFalse(action.isEnabled())
+
+        detail._download_finished(key)
+        detail.set_items([queued])
+
+        cell = detail.table.cellWidget(0, 5)
+        assert cell is not None
+        action = cell.findChild(QPushButton)
+        assert action is not None
+        self.assertTrue(action.isEnabled())
+        self.assertEqual(action.text(), "查看任务")
+
+    def test_status_refresh_preserves_compact_action_layout(self) -> None:
+        detail = self._isolated_detail(600)
+        detail.set_items([{**detail._items[0], "task_id": "task", "task_status": "queued"}])
+
+        cell = detail.table.cellWidget(0, 5)
+        assert cell is not None
+        action = cell.findChild(QPushButton)
+        assert action is not None
+        self.assertEqual(action.text(), "")
+        self.assertEqual(action.width(), 26)
+        self.assertEqual(action.toolTip(), "查看任务")
+        self.assertLessEqual(action.width(), detail.table.columnWidth(5))
+        detail._update_table_columns(1100)
+        self.assertEqual(action.text(), "查看任务")
+        self.assertGreaterEqual(action.minimumWidth(), 100)
+
+    def test_pending_and_failed_refresh_preserve_compact_action_layout(self) -> None:
+        detail = self._isolated_detail(600)
+        key = ("test", "item")
+        detail._download_workers[key] = FunctionWorker(lambda: None)
+        detail._refresh_item_row("item")
+        cell = detail.table.cellWidget(0, 5)
+        assert cell is not None
+        action = cell.findChild(QPushButton)
+        assert action is not None
+        self.assertFalse(action.isEnabled())
+        self.assertEqual(action.width(), 26)
+
+        detail._download_failed(key, "temporary failure")
+
+        cell = detail.table.cellWidget(0, 5)
+        assert cell is not None
+        action = cell.findChild(QPushButton)
+        assert action is not None
+        self.assertTrue(action.isEnabled())
+        self.assertEqual(action.text(), "")
+        self.assertEqual(action.width(), 26)
+        self.assertEqual(action.toolTip(), "下载")
+
+    def test_theme_change_updates_existing_rows_and_preserves_selection(self) -> None:
+        detail = self._isolated_detail()
+        detail.set_items(
+            [
+                {"id": "first", "title": "First", "download_url": "https://example.test/1"},
+                {"id": "second", "title": "Second", "download_url": "https://example.test/2"},
+            ],
+            selected_id="second",
+        )
+        for theme in ("dark", "light"):
+            with self.subTest(theme=theme):
+                detail.set_theme(theme)
+                self.assertEqual(detail._selected_item_id(), "second")
+                for row in range(2):
+                    cell = detail.table.cellWidget(row, 4)
+                    assert cell is not None
+                    badge = cell.findChild(BadgeLabel)
+                    assert badge is not None
+                    self.assertEqual(badge._theme, theme)
 
     def test_empty_filter_clears_hidden_selection_and_details(self) -> None:
         self.page.open_subscription(0)

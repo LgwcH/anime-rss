@@ -457,30 +457,36 @@ class SQLiteRepository:
         return task_count + item_count
 
     # Feed items --------------------------------------------------------
+    @staticmethod
+    def _feed_item_values(item: FeedItem) -> tuple[object, ...]:
+        return (
+            item.subscription_id,
+            item.guid,
+            item.title,
+            item.download_url,
+            item.content_type,
+            item.link,
+            item.description,
+            _datetime_to_text(item.published_at),
+            item.episode,
+            _datetime_to_text(item.created_at),
+        )
+
+    _FEED_ITEM_INSERT = """
+        INSERT INTO feed_items(
+            subscription_id, guid, title, download_url, content_type,
+            link, description, published_at, episode, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
     def add_feed_item(self, item: FeedItem) -> tuple[FeedItem, bool]:
         """Insert an item and return ``(stored_item, was_inserted)``."""
 
         with self._transaction() as connection:
             try:
                 cursor = connection.execute(
-                    """
-                    INSERT INTO feed_items(
-                        subscription_id, guid, title, download_url, content_type,
-                        link, description, published_at, episode, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        item.subscription_id,
-                        item.guid,
-                        item.title,
-                        item.download_url,
-                        item.content_type,
-                        item.link,
-                        item.description,
-                        _datetime_to_text(item.published_at),
-                        item.episode,
-                        _datetime_to_text(item.created_at),
-                    ),
+                    self._FEED_ITEM_INSERT,
+                    self._feed_item_values(item),
                 )
                 lastrowid = cursor.lastrowid
                 assert lastrowid is not None
@@ -618,6 +624,151 @@ class SQLiteRepository:
             task_id = task_cursor.lastrowid
             assert task_id is not None
             return stored_item, replace(task, id=int(task_id)), True
+
+    _TASK_INSERT = """
+        INSERT INTO download_tasks(
+            subscription_id, feed_item_id, title, source_url,
+            destination_directory, filename, kind, status, progress,
+            downloaded_bytes, total_bytes, error, file_manifest,
+            created_at, started_at, completed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    def add_feed_items_batch(
+        self,
+        entries: Sequence[tuple[FeedItem, DownloadTask | None]],
+    ) -> list[tuple[FeedItem, DownloadTask | None, bool]]:
+        """Record one refresh's items (and their tasks) in a single transaction.
+
+        Each entry pairs a parsed feed item with an optional task template
+        whose ``feed_item_id``/``id`` are assigned on insert.  Entries that
+        already exist come back with their existing task and ``False``; their
+        task templates are ignored, mirroring
+        :meth:`add_feed_item_with_download_task`.  Any failure rolls the whole
+        batch back so the next refresh retries instead of silently treating
+        the affected episodes as handled.
+        """
+
+        for item, task_template in entries:
+            if task_template is not None and not item.download_url:
+                raise ValueError("a download task requires a source URL")
+        with self._transaction() as connection:
+            # Both unique keys participate in deduplication. Read their current
+            # owners once, including URL conflicts with a different GUID.
+            lookups: dict[int, tuple[set[str], set[str]]] = {}
+            for item, _task_template in entries:
+                guids, urls = lookups.setdefault(item.subscription_id, (set(), set()))
+                guids.add(item.guid)
+                if item.download_url is not None:
+                    urls.add(item.download_url)
+            existing: dict[int, FeedItem] = {}
+            for subscription_id, (guids, urls) in lookups.items():
+                for column, values in (("guid", guids), ("download_url", urls)):
+                    ordered_values = list(values)
+                    for start in range(0, len(ordered_values), 500):
+                        chunk = ordered_values[start : start + 500]
+                        placeholders = ",".join("?" for _ in chunk)
+                        rows = connection.execute(
+                            "SELECT * FROM feed_items WHERE subscription_id = ? "
+                            f"AND {column} IN ({placeholders})",
+                            (subscription_id, *chunk),
+                        ).fetchall()
+                        for row in rows:
+                            existing[int(row["id"])] = self._feed_item_from_row(row)
+
+            # Owner indices preserve ORDER BY id for existing conflicts and
+            # insertion order for new ones. Ignored entries never claim keys.
+            existing_ids = sorted(existing)
+            canonical_items = [existing[item_id] for item_id in existing_ids]
+            id_owners = {item_id: owner for owner, item_id in enumerate(existing_ids)}
+            guid_owners: dict[tuple[int, str], int] = {}
+            url_owners: dict[tuple[int, str], int] = {}
+            for owner, item in enumerate(canonical_items):
+                guid_owners[(item.subscription_id, item.guid)] = owner
+                if item.download_url is not None:
+                    url_owners[(item.subscription_id, item.download_url)] = owner
+
+            tasks_by_owner: dict[int, DownloadTask] = {}
+            for start in range(0, len(existing_ids), 500):
+                id_chunk = existing_ids[start : start + 500]
+                placeholders = ",".join("?" for _ in id_chunk)
+                rows = connection.execute(
+                    f"SELECT * FROM download_tasks WHERE feed_item_id IN ({placeholders})",
+                    id_chunk,
+                ).fetchall()
+                for row in rows:
+                    owner = id_owners[int(row["feed_item_id"])]
+                    tasks_by_owner[owner] = self._download_task_from_row(row)
+
+            ownership: list[tuple[int, bool]] = []
+            new_entries: list[tuple[int, FeedItem, DownloadTask | None]] = []
+            new_guids: dict[int, list[str]] = {}
+            for item, task_template in entries:
+                guid_key = (item.subscription_id, item.guid)
+                guid_owner = guid_owners.get(guid_key)
+                url_owner = (
+                    url_owners.get((item.subscription_id, item.download_url))
+                    if item.download_url is not None
+                    else None
+                )
+                is_new = guid_owner is None and url_owner is None
+                if is_new:
+                    owner = len(canonical_items)
+                    canonical_items.append(item)
+                    guid_owners[guid_key] = owner
+                    if item.download_url is not None:
+                        url_owners[(item.subscription_id, item.download_url)] = owner
+                    new_entries.append((owner, item, task_template))
+                    new_guids.setdefault(item.subscription_id, []).append(item.guid)
+                elif guid_owner is None:
+                    assert url_owner is not None
+                    owner = url_owner
+                elif url_owner is None:
+                    owner = guid_owner
+                else:
+                    owner = min(guid_owner, url_owner)
+                ownership.append((owner, is_new))
+
+            # Only the accepted entries are inserted. A constraint failure
+            # rolls back the whole batch instead of silently changing owners.
+            if new_entries:
+                connection.executemany(
+                    self._FEED_ITEM_INSERT,
+                    [self._feed_item_values(item) for _owner, item, _task in new_entries],
+                )
+            for subscription_id, fresh_guids in new_guids.items():
+                for start in range(0, len(fresh_guids), 500):
+                    chunk = fresh_guids[start : start + 500]
+                    placeholders = ",".join("?" for _ in chunk)
+                    rows = connection.execute(
+                        "SELECT * FROM feed_items WHERE subscription_id = ? "
+                        f"AND guid IN ({placeholders})",
+                        (subscription_id, *chunk),
+                    ).fetchall()
+                    for row in rows:
+                        owner = guid_owners[(subscription_id, str(row["guid"]))]
+                        canonical_items[owner] = self._feed_item_from_row(row)
+
+            for owner, item, task_template in new_entries:
+                stored_item = canonical_items[owner]
+                assert stored_item.id is not None
+                if task_template is not None:
+                    task = replace(
+                        task_template,
+                        subscription_id=item.subscription_id,
+                        feed_item_id=stored_item.id,
+                    )
+                    task_cursor = connection.execute(
+                        self._TASK_INSERT,
+                        self._task_values(task),
+                    )
+                    task_id = task_cursor.lastrowid
+                    assert task_id is not None
+                    tasks_by_owner[owner] = replace(task, id=int(task_id))
+        return [
+            (canonical_items[owner], tasks_by_owner.get(owner), is_new)
+            for owner, is_new in ownership
+        ]
 
     # Download tasks ----------------------------------------------------
     def add_download_task(self, task: DownloadTask) -> tuple[DownloadTask, bool]:

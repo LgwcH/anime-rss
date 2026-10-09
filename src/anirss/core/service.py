@@ -44,7 +44,7 @@ from .naming import (
     safe_download_path,
     sanitize_component,
 )
-from .scheduler import SubscriptionScheduler
+from .scheduler import MAX_CONCURRENT_REFRESHES, SubscriptionScheduler
 
 EventCallback = Callable[[ServiceEvent], None]
 FeedFetcher = Callable[[str, AppSettings], bytes]
@@ -391,20 +391,45 @@ class AniRSSService:
         return deleted
 
     def refresh_all(self) -> list[DownloadTask]:
+        subscriptions = self.repository.list_subscriptions(enabled_only=True)
         created: list[DownloadTask] = []
         failures: list[tuple[str, Exception]] = []
-        for subscription in self.repository.list_subscriptions(enabled_only=True):
-            if self._shutdown_event.is_set():
-                break
-            try:
-                created.extend(self._refresh_subscription(subscription))
-            except ServiceStopping:
-                break
-            except Exception as exc:
-                # The individual refresh emitted a detailed failure.  Continue
-                # so one unavailable feed does not block all other feeds.
-                failures.append((subscription.name, exc))
-                continue
+        if len(subscriptions) <= 1:
+            for subscription in subscriptions:
+                if self._shutdown_event.is_set():
+                    break
+                try:
+                    created.extend(self._refresh_subscription(subscription))
+                except ServiceStopping:
+                    break
+                except Exception as exc:
+                    # The individual refresh emitted a detailed failure.  Continue
+                    # so one unavailable feed does not block all other feeds.
+                    failures.append((subscription.name, exc))
+                    continue
+        else:
+            # Feeds fetch in parallel so a dead source costs its own timeout
+            # instead of delaying every feed behind it.  Per-subscription
+            # refresh locks keep this safe against scheduler/manual refreshes.
+            workers = min(MAX_CONCURRENT_REFRESHES, len(subscriptions))
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="AniRSS refresh",
+            ) as pool:
+                pending = []
+                for subscription in subscriptions:
+                    if self._shutdown_event.is_set():
+                        break
+                    pending.append(
+                        (subscription, pool.submit(self._refresh_subscription, subscription))
+                    )
+                for subscription, future in pending:
+                    try:
+                        created.extend(future.result())
+                    except ServiceStopping:
+                        continue
+                    except Exception as exc:
+                        failures.append((subscription.name, exc))
         if failures:
             raise RefreshBatchError(failures)
         return created
@@ -468,6 +493,7 @@ class AniRSSService:
                     if subscription.exclude_pattern
                     else None
                 )
+                pending: list[tuple[FeedItem, bool]] = []
                 for item in feed_items:
                     if subscription.episode_pattern:
                         item = replace(
@@ -487,12 +513,42 @@ class AniRSSService:
                         and item.download_url
                         and not (initial_baseline and not subscription.download_existing)
                     )
-                    if not should_create_task:
-                        self.repository.add_feed_item(item)
-                        continue
-                    _, stored_task, task_was_new = self._create_feed_item_download_task(
-                        subscription, item, destination, naming
-                    )
+                    pending.append((item, should_create_task))
+                if self._shutdown_event.is_set():
+                    raise ServiceStopping("service is stopping")
+                # One transaction per refresh instead of one per feed entry:
+                # WAL commits (and their fsyncs) dominate refresh latency.
+                # Filename reservations stay inside the filename lock and are
+                # cached per directory for this round, so K new tasks cost one
+                # directory query instead of K growing ones.
+                used_names: dict[str, set[str]] = {}
+                with self._filename_lock:
+                    entries: list[tuple[FeedItem, DownloadTask | None]] = []
+                    for item, wants_task in pending:
+                        if not wants_task:
+                            entries.append((item, None))
+                            continue
+                        assert item.download_url is not None
+                        filename = self._unique_task_filename(
+                            destination,
+                            naming.filename_for(item),
+                            used_names=used_names,
+                        )
+                        entries.append(
+                            (
+                                item,
+                                DownloadTask(
+                                    subscription_id=subscription_id,
+                                    title=item.title,
+                                    source_url=item.download_url,
+                                    destination_directory=str(destination),
+                                    filename=filename,
+                                    kind=classify_download(item.download_url, item.content_type),
+                                ),
+                            )
+                        )
+                    stored_entries = self.repository.add_feed_items_batch(entries)
+                for _stored_item, stored_task, task_was_new in stored_entries:
                     if not task_was_new or stored_task is None:
                         continue
                     created_tasks.append(stored_task)
@@ -1301,15 +1357,22 @@ class AniRSSService:
         self,
         destination: Path,
         requested: str,
+        *,
+        used_names: dict[str, set[str]] | None = None,
     ) -> str:
         # Tasks persist str() of the resolved directory handed out by
         # NamingPolicy.directory_for, so an exact match finds every task that
         # shares this folder without scanning the whole task history.
-        resolved = destination.resolve()
-        used = {
-            filename.casefold()
-            for filename in self.repository.list_download_task_filenames(str(resolved))
-        }
+        resolved = str(destination.resolve())
+        if used_names is not None and resolved in used_names:
+            used = used_names[resolved]
+        else:
+            used = {
+                filename.casefold()
+                for filename in self.repository.list_download_task_filenames(resolved)
+            }
+            if used_names is not None:
+                used_names[resolved] = used
         candidate = requested
         path = safe_download_path(destination, candidate)
         number = 2
@@ -1319,27 +1382,10 @@ class AniRSSService:
             candidate = sanitize_component(f"{stem} ({number}){suffix}", max_length=220)
             path = safe_download_path(destination, candidate)
             number += 1
+        # Reserve the winner for the rest of this refresh round; without a
+        # cache ``used`` is local and the add is a harmless no-op.
+        used.add(candidate.casefold())
         return candidate
-
-    def _create_feed_item_download_task(
-        self,
-        subscription: Subscription,
-        item: FeedItem,
-        destination: Path,
-        naming: NamingPolicy,
-    ) -> tuple[FeedItem, DownloadTask | None, bool]:
-        """Atomically reserve a filename and persist the item/task pair."""
-
-        assert subscription.id is not None
-        assert item.download_url is not None
-        with self._filename_lock:
-            filename = self._unique_task_filename(destination, naming.filename_for(item))
-            return self.repository.add_feed_item_with_download_task(
-                item,
-                destination_directory=str(destination),
-                filename=filename,
-                kind=classify_download(item.download_url, item.content_type),
-            )
 
 
 __all__ = [

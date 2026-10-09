@@ -254,6 +254,10 @@ class MainWindow(QMainWindow):
         ]
         if not any(precise_connections):
             self._connect_optional_signal("data_changed", self._reload_visible_data)
+        # Badge counters only change with task set/status transitions.  Pure
+        # progress flushes must not re-run the subscription/dashboard queries.
+        if not self._connect_optional_signal("downloads_state_changed", self._update_nav_badges):
+            self._connect_optional_signal("downloads_changed", self._update_nav_badges)
         self._connect_optional_signal("notification", self._controller_notification)
         self._connect_optional_signal("error", self.show_error)
 
@@ -277,7 +281,6 @@ class MainWindow(QMainWindow):
             self.downloads_page.reload()
         elif current is self.overview_page:
             self.overview_page.reload()
-        self._update_nav_badges()
 
     def _load_initial_settings(self) -> None:
         try:

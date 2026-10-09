@@ -8,10 +8,11 @@ import threading
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QUrl, Signal
+from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 
 from .core.downloaders import classify_download
@@ -55,6 +56,13 @@ def _unescape_keyword(value: str) -> str:
     """Reverse the simple output produced by :func:`re.escape`."""
 
     return re.sub(r"\\(.)", r"\1", value)
+
+
+@lru_cache(maxsize=128)
+def _compiled_search_pattern(pattern: str) -> re.Pattern[str]:
+    """Compile a subscription include/exclude regex once per unique pattern."""
+
+    return re.compile(pattern, re.I)
 
 
 def _split_escaped_alternatives(value: str) -> list[str]:
@@ -104,9 +112,17 @@ class DesktopController(QObject):
     data_changed = Signal()
     subscriptions_changed = Signal()
     downloads_changed = Signal()
+    # Emitted only when the task set or a task status changes; pure progress
+    # samples are coalesced into throttled ``downloads_changed`` emissions.
+    downloads_state_changed = Signal()
     settings_changed = Signal()
     notification = Signal(str, str)
     error = Signal(str)
+    # Private relay that bounces service-thread progress events to the GUI
+    # thread, where the coalescing timer lives.
+    _progress_events_due = Signal()
+
+    _PROGRESS_FLUSH_INTERVAL_MS = 400
 
     def __init__(
         self,
@@ -125,6 +141,11 @@ class DesktopController(QObject):
         self._speed_lock = threading.Lock()
         # task id -> (sample timestamp, bytes, smoothed bytes/second)
         self._speed_samples: dict[int, tuple[float, int, float]] = {}
+        self._progress_flush_timer = QTimer(self)
+        self._progress_flush_timer.setSingleShot(True)
+        self._progress_flush_timer.setInterval(self._PROGRESS_FLUSH_INTERVAL_MS)
+        self._progress_flush_timer.timeout.connect(self._flush_progress_events)
+        self._progress_events_due.connect(self._arm_progress_flush)
         self.service.set_event_callback(self._on_service_event)
 
     # Dashboard -------------------------------------------------------
@@ -281,10 +302,14 @@ class DesktopController(QObject):
         if subscription is None:
             raise KeyError(f"subscription {numeric_id} does not exist")
         include = (
-            re.compile(subscription.include_pattern, re.I) if subscription.include_pattern else None
+            _compiled_search_pattern(subscription.include_pattern)
+            if subscription.include_pattern
+            else None
         )
         exclude = (
-            re.compile(subscription.exclude_pattern, re.I) if subscription.exclude_pattern else None
+            _compiled_search_pattern(subscription.exclude_pattern)
+            if subscription.exclude_pattern
+            else None
         )
         tasks = {
             task.feed_item_id: task for task in self.service.list_tasks(subscription_id=numeric_id)
@@ -480,6 +505,7 @@ class DesktopController(QObject):
         if self._closed:
             return
         self._closed = True
+        self._progress_flush_timer.stop()
         with self._operation_condition:
             self._closing = True
         self.service.set_event_callback(None)
@@ -507,21 +533,31 @@ class DesktopController(QObject):
                 self._instance_lock.release()
 
     def _on_service_event(self, event: ServiceEvent) -> None:
+        # Runs on service worker threads; only lock-guarded state and Qt
+        # signal emissions (queued cross-thread) are safe here.
         if event.type == ServiceEventType.TASK_UPDATED and event.task_id is not None:
             self._record_speed(event.task_id, event.payload)
+            if event.message == "Progress":
+                # Progress samples arrive at least once per second per active
+                # task.  Coalesce them into one throttled GUI-side flush.
+                self._progress_events_due.emit()
+                return
             self.downloads_changed.emit()
+            self.downloads_state_changed.emit()
             self.data_changed.emit()
             if event.payload.get("status") == DownloadStatus.COMPLETED.value:
                 task = self.service.get_task(event.task_id)
                 self.notification.emit("下载完成", task.title if task else "任务已完成")
         elif event.type == ServiceEventType.TASK_ADDED:
             self.downloads_changed.emit()
+            self.downloads_state_changed.emit()
             self.data_changed.emit()
             task = self.service.get_task(event.task_id) if event.task_id is not None else None
             title = "已加入下载" if event.payload.get("manual") else "发现新剧集"
             self.notification.emit(title, task.title if task else "新任务已加入队列")
         elif event.type == ServiceEventType.TASK_REMOVED:
             self.downloads_changed.emit()
+            self.downloads_state_changed.emit()
             self.data_changed.emit()
         elif event.type in {
             ServiceEventType.SUBSCRIPTION_SAVED,
@@ -557,6 +593,20 @@ class DesktopController(QObject):
                 instant = (downloaded - previous[1]) / (now - previous[0])
                 speed = instant if previous[2] <= 0 else previous[2] * 0.65 + instant * 0.35
             self._speed_samples[task_id] = (now, downloaded, speed)
+
+    def _arm_progress_flush(self) -> None:
+        # Invoked in the GUI thread through the queued _progress_events_due
+        # relay.  An already-running timer is left alone so a steady stream
+        # of progress events cannot postpone the flush indefinitely.
+        if self._closed or self._progress_flush_timer.isActive():
+            return
+        self._progress_flush_timer.start()
+
+    def _flush_progress_events(self) -> None:
+        if self._closed:
+            return
+        self.downloads_changed.emit()
+        self.data_changed.emit()
 
     @staticmethod
     def _datetime_text(value: datetime | None) -> str:

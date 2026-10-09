@@ -198,101 +198,12 @@ class DownloadsPage(QWidget):
             self._visible_items = list(self._all_items)
         self._render(preserve_scroll=preserve_scroll)
 
-    def _render(self, *, preserve_scroll: bool = True) -> None:
-        scroll_value = self.table.verticalScrollBar().value() if preserve_scroll else 0
-        self.table.setRowCount(0)
-        c = colors(self._theme)
-        for item in self._visible_items:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            title = str(item.get("title") or item.get("name") or "未命名任务")[:2000]
-            anime = str(item.get("anime") or item.get("series_name") or "")[:500]
-            task_cell = QWidget()
-            task_layout = QVBoxLayout(task_cell)
-            task_layout.setContentsMargins(7, 7, 6, 7)
-            task_layout.setSpacing(2)
-            title_label = ElidedLabel(title)
-            title_label.setStyleSheet("font-weight:650;")
-            progress = progress_percent(item.get("progress", 0))
-            meta_parts = [
-                part
-                for part in [anime, f"第 {item.get('episode')} 集" if item.get("episode") else ""]
-                if part
-            ]
-            wide_meta = " · ".join(meta_parts) or "RSS 自动任务"
-            speed = str(item.get("speed") or "—")[:100]
-            compact_meta = f"{wide_meta} · {progress}% · {speed}"
-            meta = ElidedLabel(wide_meta)
-            meta.setObjectName("DownloadMeta")
-            meta.setProperty("wideText", wide_meta)
-            meta.setProperty("compactText", compact_meta)
-            meta.setStyleSheet(f"color:{c.text_muted};font-size:11px;")
-            task_layout.addWidget(title_label)
-            task_layout.addWidget(meta)
-            self.table.setCellWidget(row, 0, task_cell)
-            data_item = QTableWidgetItem()
-            data_item.setData(Qt.ItemDataRole.UserRole, item)
-            self.table.setItem(row, 0, data_item)
-            # Replacing an item does not replace the cell widget; it stores row data.
-
-            progress_cell = QWidget()
-            progress_layout = QVBoxLayout(progress_cell)
-            progress_layout.setContentsMargins(7, 8, 7, 7)
-            progress_layout.setSpacing(5)
-            progress_line = QHBoxLayout()
-            progress_label = ElidedLabel(f"{progress}%")
-            progress_label.setStyleSheet("font-weight:650;")
-            eta = ElidedLabel(str(item.get("eta") or "—"))
-            eta.setMaximumWidth(110)
-            eta.setStyleSheet(f"color:{c.text_muted};font-size:11px;")
-            progress_line.addWidget(progress_label)
-            progress_line.addStretch()
-            progress_line.addWidget(eta)
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(progress)
-            bar.setTextVisible(False)
-            progress_layout.addLayout(progress_line)
-            progress_layout.addWidget(bar)
-            self.table.setCellWidget(row, 1, progress_cell)
-
-            total_size = item.get("size", item.get("total_bytes"))
-            self.table.setItem(row, 2, QTableWidgetItem(human_bytes(total_size)))
-            speed_text = str(item.get("speed") or "—")[:500]
-            speed_item = QTableWidgetItem(speed_text)
-            speed_item.setToolTip(html.escape(speed_text))
-            self.table.setItem(row, 3, speed_item)
-
-            status = str(item.get("status") or "queued")[:50].lower()
-            fallback = f"{status[:11]}…" if len(status) > 12 else status or "未知"
-            label_text, tone = STATUS_LABELS.get(status, (fallback, "neutral"))
-            badge = BadgeLabel(label_text, tone)
-            badge.set_theme(self._theme)
-            status_cell = QWidget()
-            status_layout = QHBoxLayout(status_cell)
-            status_layout.setContentsMargins(5, 0, 5, 0)
-            status_layout.addWidget(badge)
-            self.table.setCellWidget(row, 4, status_cell)
-
-            actions = QWidget()
-            action_layout = QHBoxLayout(actions)
-            action_layout.setContentsMargins(3, 0, 3, 0)
-            action_layout.setSpacing(1)
-            if status in {"downloading", "checking", "seeding"}:
-                toggle = self._action_button("pause", "暂停任务", c.text_muted)
-                toggle.clicked.connect(lambda _checked=False, r=row: self._pause(r))
-            elif status in {"paused", "failed", "queued"}:
-                toggle = self._action_button("play", "恢复任务", c.accent)
-                toggle.clicked.connect(lambda _checked=False, r=row: self._resume(r))
-            else:
-                toggle = self._action_button("folder", "打开保存目录", c.text_muted)
-                toggle.clicked.connect(lambda _checked=False, r=row: self._open_folder(r, 0))
-            remove = self._action_button("delete", "移除任务", c.danger)
-            remove.setProperty("danger", True)
-            remove.clicked.connect(lambda _checked=False, r=row: self._remove(r))
-            action_layout.addWidget(toggle)
-            action_layout.addWidget(remove)
-            self.table.setCellWidget(row, 5, actions)
+    def _render(self, *, preserve_scroll: bool = True, force_rebuild: bool = False) -> None:
+        previous = self._rendered_items()
+        if not force_rebuild and previous is not None and self._rows_match(previous):
+            self._refresh_rows(previous)
+        else:
+            self._rebuild_rows(preserve_scroll=preserve_scroll)
 
         has_rows = bool(self._visible_items)
         filtered = bool(self._all_items) and (
@@ -310,6 +221,194 @@ class DownloadsPage(QWidget):
             )
         self._update_responsive_columns(self.width())
         self.stack.setCurrentWidget(self.table if has_rows else self.empty_card)
+
+    def _rendered_items(self) -> list[dict[str, Any]] | None:
+        """Item payload currently stored on each row, or None if unreadable."""
+
+        items: list[dict[str, Any]] = []
+        for row in range(self.table.rowCount()):
+            cell_item = self.table.item(row, 0)
+            data = cell_item.data(Qt.ItemDataRole.UserRole) if cell_item is not None else None
+            if not isinstance(data, dict):
+                return None
+            items.append(data)
+        return items
+
+    @staticmethod
+    def _row_signature(item: dict[str, Any]) -> tuple[Any, ...]:
+        """Fields that would alter a row's structure; progress/speed do not."""
+
+        return (
+            item.get("id"),
+            str(item.get("title") or item.get("name") or "未命名任务")[:2000],
+            str(item.get("anime") or item.get("series_name") or "")[:500],
+            str(item.get("episode") or ""),
+            str(item.get("kind") or ""),
+        )
+
+    def _rows_match(self, previous: list[dict[str, Any]] | None) -> bool:
+        if previous is None or len(previous) != len(self._visible_items):
+            return False
+        return all(
+            self._row_signature(old) == self._row_signature(new)
+            for old, new in zip(previous, self._visible_items, strict=True)
+        )
+
+    def _refresh_rows(self, previous: list[dict[str, Any]]) -> None:
+        """Update values in place; only status flips rebuild a row's cells."""
+
+        for row, (old, item) in enumerate(zip(previous, self._visible_items, strict=True)):
+            data_item = self.table.item(row, 0)
+            if data_item is not None:
+                data_item.setData(Qt.ItemDataRole.UserRole, item)
+            self._refresh_row_progress(row, item)
+
+            size_item = self.table.item(row, 2)
+            if size_item is not None:
+                size_item.setText(human_bytes(item.get("size", item.get("total_bytes"))))
+            speed_text = str(item.get("speed") or "—")[:500]
+            speed_item = self.table.item(row, 3)
+            if speed_item is not None:
+                speed_item.setText(speed_text)
+                speed_item.setToolTip(html.escape(speed_text))
+
+            old_status = str(old.get("status") or "queued")[:50].lower()
+            new_status = str(item.get("status") or "queued")[:50].lower()
+            if old_status != new_status:
+                self.table.setCellWidget(row, 4, self._build_status_cell(new_status))
+                self.table.setCellWidget(row, 5, self._build_actions_cell(row, new_status))
+
+    def _refresh_row_progress(self, row: int, item: dict[str, Any]) -> None:
+        progress = progress_percent(item.get("progress", 0))
+        task_cell = self.table.cellWidget(row, 0)
+        meta = task_cell.findChild(ElidedLabel, "DownloadMeta") if task_cell is not None else None
+        if meta is not None:
+            wide_meta = str(meta.property("wideText") or "")
+            speed = str(item.get("speed") or "—")[:100]
+            meta.setProperty("compactText", f"{wide_meta} · {progress}% · {speed}")
+        progress_cell = self.table.cellWidget(row, 1)
+        if progress_cell is None:
+            return
+        percent_label = progress_cell.findChild(ElidedLabel, "DownloadProgress")
+        if percent_label is not None:
+            percent_label.setText(f"{progress}%")
+        eta_label = progress_cell.findChild(ElidedLabel, "DownloadEta")
+        if eta_label is not None:
+            eta_label.setText(str(item.get("eta") or "—"))
+        bar = progress_cell.findChild(QProgressBar)
+        if bar is not None:
+            bar.setValue(progress)
+
+    def _build_status_cell(self, status: str) -> QWidget:
+        fallback = f"{status[:11]}…" if len(status) > 12 else status or "未知"
+        label_text, tone = STATUS_LABELS.get(status, (fallback, "neutral"))
+        badge = BadgeLabel(label_text, tone)
+        badge.set_theme(self._theme)
+        status_cell = QWidget()
+        status_layout = QHBoxLayout(status_cell)
+        status_layout.setContentsMargins(5, 0, 5, 0)
+        status_layout.addWidget(badge)
+        return status_cell
+
+    def _build_actions_cell(self, row: int, status: str) -> QWidget:
+        c = colors(self._theme)
+        actions = QWidget()
+        action_layout = QHBoxLayout(actions)
+        action_layout.setContentsMargins(3, 0, 3, 0)
+        action_layout.setSpacing(1)
+        if status in {"downloading", "checking", "seeding"}:
+            toggle = self._action_button("pause", "暂停任务", c.text_muted)
+            toggle.clicked.connect(lambda _checked=False, r=row: self._pause(r))
+        elif status in {"paused", "failed", "queued"}:
+            toggle = self._action_button("play", "恢复任务", c.accent)
+            toggle.clicked.connect(lambda _checked=False, r=row: self._resume(r))
+        else:
+            toggle = self._action_button("folder", "打开保存目录", c.text_muted)
+            toggle.clicked.connect(lambda _checked=False, r=row: self._open_folder(r, 0))
+        remove = self._action_button("delete", "移除任务", c.danger)
+        remove.setProperty("danger", True)
+        remove.clicked.connect(lambda _checked=False, r=row: self._remove(r))
+        action_layout.addWidget(toggle)
+        action_layout.addWidget(remove)
+        return actions
+
+    def _rebuild_rows(self, *, preserve_scroll: bool = True) -> None:
+        scroll_value = self.table.verticalScrollBar().value() if preserve_scroll else 0
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(0)
+            c = colors(self._theme)
+            for item in self._visible_items:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                title = str(item.get("title") or item.get("name") or "未命名任务")[:2000]
+                anime = str(item.get("anime") or item.get("series_name") or "")[:500]
+                task_cell = QWidget()
+                task_layout = QVBoxLayout(task_cell)
+                task_layout.setContentsMargins(7, 7, 6, 7)
+                task_layout.setSpacing(2)
+                title_label = ElidedLabel(title)
+                title_label.setStyleSheet("font-weight:650;")
+                progress = progress_percent(item.get("progress", 0))
+                meta_parts = [
+                    part
+                    for part in [
+                        anime,
+                        f"第 {item.get('episode')} 集" if item.get("episode") else "",
+                    ]
+                    if part
+                ]
+                wide_meta = " · ".join(meta_parts) or "RSS 自动任务"
+                speed = str(item.get("speed") or "—")[:100]
+                compact_meta = f"{wide_meta} · {progress}% · {speed}"
+                meta = ElidedLabel(wide_meta)
+                meta.setObjectName("DownloadMeta")
+                meta.setProperty("wideText", wide_meta)
+                meta.setProperty("compactText", compact_meta)
+                meta.setStyleSheet(f"color:{c.text_muted};font-size:11px;")
+                task_layout.addWidget(title_label)
+                task_layout.addWidget(meta)
+                self.table.setCellWidget(row, 0, task_cell)
+                data_item = QTableWidgetItem()
+                data_item.setData(Qt.ItemDataRole.UserRole, item)
+                self.table.setItem(row, 0, data_item)
+                # Replacing an item does not replace the cell widget; it stores row data.
+
+                progress_cell = QWidget()
+                progress_layout = QVBoxLayout(progress_cell)
+                progress_layout.setContentsMargins(7, 8, 7, 7)
+                progress_layout.setSpacing(5)
+                progress_line = QHBoxLayout()
+                progress_label = ElidedLabel(f"{progress}%")
+                progress_label.setObjectName("DownloadProgress")
+                progress_label.setStyleSheet("font-weight:650;")
+                eta = ElidedLabel(str(item.get("eta") or "—"))
+                eta.setObjectName("DownloadEta")
+                eta.setMaximumWidth(110)
+                eta.setStyleSheet(f"color:{c.text_muted};font-size:11px;")
+                progress_line.addWidget(progress_label)
+                progress_line.addStretch()
+                progress_line.addWidget(eta)
+                bar = QProgressBar()
+                bar.setRange(0, 100)
+                bar.setValue(progress)
+                bar.setTextVisible(False)
+                progress_layout.addLayout(progress_line)
+                progress_layout.addWidget(bar)
+                self.table.setCellWidget(row, 1, progress_cell)
+
+                total_size = item.get("size", item.get("total_bytes"))
+                self.table.setItem(row, 2, QTableWidgetItem(human_bytes(total_size)))
+                speed_text = str(item.get("speed") or "—")[:500]
+                speed_item = QTableWidgetItem(speed_text)
+                speed_item.setToolTip(html.escape(speed_text))
+                self.table.setItem(row, 3, speed_item)
+
+                status = str(item.get("status") or "queued")[:50].lower()
+                self.table.setCellWidget(row, 4, self._build_status_cell(status))
+                self.table.setCellWidget(row, 5, self._build_actions_cell(row, status))
+        finally:
+            self.table.setUpdatesEnabled(True)
         QTimer.singleShot(
             0,
             lambda value=scroll_value: self.table.verticalScrollBar().setValue(
@@ -456,4 +555,5 @@ class DownloadsPage(QWidget):
         self._theme = theme
         self.empty.set_theme(theme)
         if self._visible_items or self._all_items:
-            self._render()
+            # Badges and action icons carry theme colors; rows must be rebuilt.
+            self._render(force_rebuild=True)
